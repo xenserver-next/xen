@@ -55,6 +55,7 @@ extern u8 *memnodemap;
 struct node_data {
     unsigned long node_start_pfn;
     unsigned long node_spanned_pages;
+    unsigned long node_present_pages;
 };
 
 extern struct node_data node_data[];
@@ -72,6 +73,7 @@ static inline __attribute__((pure)) nodeid_t phys_to_nid(paddr_t addr)
 
 #define node_start_pfn(nid)	(NODE_DATA(nid)->node_start_pfn)
 #define node_spanned_pages(nid)	(NODE_DATA(nid)->node_spanned_pages)
+#define node_present_pages(nid) (NODE_DATA(nid)->node_present_pages)
 #define node_end_pfn(nid)       (NODE_DATA(nid)->node_start_pfn + \
 				 NODE_DATA(nid)->node_spanned_pages)
 #define arch_want_default_dmazone() (num_online_nodes() > 1)

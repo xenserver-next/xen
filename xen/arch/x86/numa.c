@@ -173,6 +173,25 @@ void __init setup_node_bootmem(nodeid_t nodeid, paddr_t start, paddr_t end)
     NODE_DATA(nodeid)->node_start_pfn = start_pfn;
     NODE_DATA(nodeid)->node_spanned_pages = end_pfn - start_pfn;
 
+    // count the pages present in the node for the get_numainfo() Hypercall command
+    NODE_DATA(nodeid)->node_present_pages = 0;
+    for ( int i = 0; i < e820.nr_map; i++ )
+        if ( e820.map[i].type == E820_RAM ) {
+            paddr_t map_start = e820.map[i].addr;
+            paddr_t map_end = e820.map[i].addr + e820.map[i].size;
+
+            // skip if this e820 map is beyond or below the node's memory range
+            if ( map_start >= end || map_end <= start )
+                continue;
+
+            // limit the added memory to the node's memory range
+            map_start = max(map_start, start);
+            map_end = min(map_end, end);
+
+            // add the included part of the memory to the node's present pages
+            NODE_DATA(nodeid)->node_present_pages += (map_end - map_start) >> PAGE_SHIFT;
+        }
+
     node_set_online(nodeid);
 } 
 
@@ -387,7 +406,7 @@ static void cf_check dump_numa(unsigned char key)
         paddr_t pa = pfn_to_paddr(node_start_pfn(i) + 1);
 
         printk("NODE%u start->%lu size->%lu free->%lu\n",
-               i, node_start_pfn(i), node_spanned_pages(i),
+               i, node_start_pfn(i), node_present_pages(i),
                avail_node_heap_pages(i));
         /* sanity check phys_to_nid() */
         if ( phys_to_nid(pa) != i )
