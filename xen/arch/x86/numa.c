@@ -164,14 +164,43 @@ int __init compute_hash_shift(struct node *nodes, int numnodes,
 
     return shift;
 }
+
+/* Backport from upstream master to test master in the 4.17 release */
+int __init arch_get_ram_range(unsigned int idx, paddr_t *start, paddr_t *end)
+{
+    if ( idx >= e820.nr_map )
+        return -ENOENT;
+
+    if ( e820.map[idx].type != E820_RAM )
+        return -ENODATA;
+
+    *start = e820.map[idx].addr;
+    *end = *start + e820.map[idx].size;
+
+    return 0;
+}
+
 /* initialize NODE_DATA given nodeid and start/end */
 void __init setup_node_bootmem(nodeid_t nodeid, paddr_t start, paddr_t end)
 {
     unsigned long start_pfn = paddr_to_pfn(start);
     unsigned long end_pfn = paddr_to_pfn(end);
+    paddr_t map_start, map_end;
+    int i = 0, err;
 
     NODE_DATA(nodeid)->node_start_pfn = start_pfn;
     NODE_DATA(nodeid)->node_spanned_pages = end_pfn - start_pfn;
+
+    /* Add RAM pages within the node to get the present pages for memsize infos */
+    NODE_DATA(nodeid)->node_present_pages = 0;
+    while ( (err = arch_get_ram_range(i++, &map_start, &map_end)) != -ENOENT ) {
+        if ( err || map_start >= end || map_end <= start )
+            continue;  /* Skip non-RAM and maps outside of the node's memory range */
+        /* Add memory that is in the node's memory range (within start and end): */
+        map_start = max(map_start, start);
+        map_end = min(map_end, end);
+        NODE_DATA(nodeid)->node_present_pages += (map_end - map_start) >> PAGE_SHIFT;
+    }
 
     node_set_online(nodeid);
 } 
@@ -387,7 +416,7 @@ static void cf_check dump_numa(unsigned char key)
         paddr_t pa = pfn_to_paddr(node_start_pfn(i) + 1);
 
         printk("NODE%u start->%lu size->%lu free->%lu\n",
-               i, node_start_pfn(i), node_spanned_pages(i),
+               i, node_start_pfn(i), node_present_pages(i),
                avail_node_heap_pages(i));
         /* sanity check phys_to_nid() */
         if ( phys_to_nid(pa) != i )

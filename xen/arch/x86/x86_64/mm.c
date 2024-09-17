@@ -1201,8 +1201,26 @@ static int mem_hotadd_check(unsigned long spfn, unsigned long epfn)
 }
 
 /*
- * A bit paranoid for memory allocation failure issue since
- * it may be reason for memory add
+ * @brief This function adds a contiguous range of pages to the Xen hypervisor heap.
+ *
+ * It updates the machine-to-phys (m2p) table, max_page, max_pdx, total_pages,
+ * extends the frame table, and sets the page table entries for the new memory range.
+ *
+ * It also updates the node_start_pfn and node_spanned_pages fields in the node_data
+ * structure for the NUMA node that the memory range belongs to.
+ *
+ * If the NUMA node is offline, it sets the node's online flag.
+ *
+ * If the hardware domain uses an IOMMU and the IOMMU pagetable
+ * is not using the HW domain's P2M table or is not kept in sync,
+ * it also updates the IOMMU maps for the newly added memory.
+ *
+ * If memory allocations or the addition fails, the function reverts its changes.
+ *
+ * @param spfn The starting page frame number of the range.
+ * @param epfn The ending page frame number of the range.
+ * @param pxm The proximity domain of the range, which represents the NUMA node.
+ * @return 0 on success, or a negative error code on failure.
  */
 int memory_add(unsigned long spfn, unsigned long epfn, unsigned int pxm)
 {
@@ -1318,6 +1336,8 @@ int memory_add(unsigned long spfn, unsigned long epfn, unsigned int pxm)
     /* We can't revert any more */
     share_hotadd_m2p_table(&info);
     transfer_pages_to_heap(&info);
+    /* Update the node's present pages (like the total_pages of the system) */
+    NODE_DATA(node)->node_present_pages += epfn - spfn;
 
     return 0;
 
