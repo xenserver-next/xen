@@ -51,6 +51,22 @@ nodeid_t pxm_to_node(unsigned pxm)
 	return NUMA_NO_NODE;
 }
 
+/**
+ * @brief Set up a NUMA node based on the given proximity domain (pxm).
+ *
+ * If the proximity domain is already found in the pxm2node array, this function
+ * returns the node ID associated with the given proximity domain.
+ *
+ * Otherwise, it assigns a new node ID to the proximity domain and returns it.
+ * If the maximum number of nodes has been reached, it returns an error code.
+ *
+ * @param pxm The proximity domain to set up or to find in the pxm2node array.
+ * @return The node ID associated with the given proximity domain,
+ *         or NUMA_NO_NODE if the setup fails
+ *         or the maximum number of nodes has been reached.
+ *
+ * @note Uses a static variable to assign the next NUMA node ID to be assigned.
+ */
 nodeid_t setup_node(unsigned pxm)
 {
 	nodeid_t node;
@@ -212,7 +228,19 @@ acpi_numa_processor_affinity_init(const struct acpi_srat_cpu_affinity *pa)
 		       pxm, pa->apic_id, node);
 }
 
-/* Callback for parsing of the Proximity Domain <-> Memory Area mappings */
+/**
+ * @brief Initialize memory affinity for an SRAT memory affinity structure.
+ * @param ma Pointer to the ACPI SRAT memory affinity structure to be parsed.
+ *
+ * Callback for parsing of the Proximity Domain <-> Memory Area mappings
+ * provided by the ACPI SRAT(System Resource Affinity Table)
+ *
+ * This function is called during the initialization phase and is responsible
+ * for setting up memory affinity information for NUMA nodes
+ * based on the provided ACPI SRAT entries.
+ *
+ * If valid, it updates the memory block information for the specified node.
+ */
 void __init
 acpi_numa_memory_affinity_init(const struct acpi_srat_mem_affinity *ma)
 {
@@ -314,16 +342,29 @@ void __init srat_parse_regions(paddr_t addr)
 	pfn_pdx_hole_setup(mask >> PAGE_SHIFT);
 }
 
+/**
+ * @brief Find the proximity domain of a given NUMA node ID
+ *
+ * @param node The NUMA node ID to look up.
+ * @return The proximity domain of the given NUMA node ID, or 0 if not found
+ *
+ * This funciton uses the pxm2node array to find the proximity domain:
+ * The pxm2node array maps proximity domains to NUMA nodes and is indexed by the
+ * proximity domain. Each entry contains the proximity domain and the NUMA node.
+ */
 unsigned int numa_node_to_arch_nid(nodeid_t n)
 {
 	unsigned int i;
 
+	/* If the NUMA node is found using the index, return the pxm directly: */
 	if ((n < ARRAY_SIZE(pxm2node)) && (pxm2node[n].node == n))
 		return pxm2node[n].pxm;
+
+	/* Else, scan over the pxm2node array to find the architecture node ID: */
 	for (i = 0; i < ARRAY_SIZE(pxm2node); i++)
 		if (pxm2node[i].node == n)
 			return pxm2node[i].pxm;
-	return 0;
+	return 0;  /* If the node ID is not found, return 0. */
 }
 
 u8 __node_distance(nodeid_t a, nodeid_t b)
