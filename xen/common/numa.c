@@ -4,6 +4,7 @@
  * Adapted for Xen: Ryan Harper <ryanh@us.ibm.com>
  */
 
+#include "xen/pfn.h"
 #include <xen/init.h>
 #include <xen/keyhandler.h>
 #include <xen/mm.h>
@@ -499,15 +500,39 @@ int __init compute_hash_shift(const struct node *nodes,
     return shift;
 }
 
-/* Initialize NODE_DATA given nodeid and start/end */
+/**
+ * @brief Initialize a NUMA node's NODE_DATA given nodeid and start/end addrs.
+ *
+ * This function sets up the boot memory for a given NUMA node by calculating
+ * the node's start and end page frame numbers (PFNs) and determining
+ * the number of present RAM pages within the node's memory range.
+ *
+ * @param nodeid The identifier of the node to initialize.
+ * @param start The starting physical address of the node's memory range.
+ * @param end The ending physical address of the node's memory range.
+ */
 void __init setup_node_bootmem(nodeid_t nodeid, paddr_t start, paddr_t end)
 {
     unsigned long start_pfn = paddr_to_pfn(start);
     unsigned long end_pfn = paddr_to_pfn(end);
+    struct node_data *numa_node = NODE_DATA(nodeid);
+    paddr_t start_ram, end_ram;
+    unsigned long pages = 0;
+    unsigned int idx = 0;
+    int err;
 
-    NODE_DATA(nodeid)->node_start_pfn = start_pfn;
-    NODE_DATA(nodeid)->node_spanned_pages = end_pfn - start_pfn;
+    numa_node->node_start_pfn = start_pfn;
+    numa_node->node_spanned_pages = end_pfn - start_pfn;
 
+    /* Calculate the number of present RAM pages within the node: */
+    while ( (err = arch_get_ram_range(idx++, &start_ram, &end_ram)) != -ENOENT )
+    {
+        if ( err || start_ram >= end || end_ram <= start )
+            continue;  /* Not RAM (err != 0) or range is outside the node */
+
+        pages += PFN_DOWN(min(end_ram, end)) - PFN_UP(max(start_ram, start));
+    }
+    numa_node->node_present_pages = pages;
     node_set_online(nodeid);
 }
 
