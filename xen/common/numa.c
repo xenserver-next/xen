@@ -675,7 +675,7 @@ static void cf_check dump_numa(unsigned char key)
         mfn_t mfn = _mfn(node_start_pfn(i) + 1);
 
         printk("NODE%u start->%lu size->%lu free->%lu\n",
-               i, node_start_pfn(i), node_spanned_pages(i),
+               i, node_start_pfn(i), node_present_pages(i),
                avail_node_heap_pages(i));
         /* Sanity check mfn_to_nid() */
         if ( node_spanned_pages(i) > 1 && mfn_to_nid(mfn) != i )
