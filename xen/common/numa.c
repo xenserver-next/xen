@@ -504,10 +504,22 @@ void __init setup_node_bootmem(nodeid_t nodeid, paddr_t start, paddr_t end)
 {
     unsigned long start_pfn = paddr_to_pfn(start);
     unsigned long end_pfn = paddr_to_pfn(end);
+    paddr_t map_start, map_end;
+    int i = 0, err;
 
     NODE_DATA(nodeid)->node_start_pfn = start_pfn;
     NODE_DATA(nodeid)->node_spanned_pages = end_pfn - start_pfn;
 
+    /* Add RAM pages within the node to get the present pages for memsize infos */
+    NODE_DATA(nodeid)->node_present_pages = 0;
+    while ( (err = arch_get_ram_range(i++, &map_start, &map_end)) != -ENOENT ) {
+        if ( err || map_start >= end || map_end <= start )
+            continue;  /* Skip non-RAM and maps outside of the node's memory range */
+        /* Add memory that is in the node's memory range (within start and end): */
+        map_start = max(map_start, start);
+        map_end = min(map_end, end);
+        NODE_DATA(nodeid)->node_present_pages += (map_end - map_start) >> PAGE_SHIFT;
+    }
     node_set_online(nodeid);
 }
 
@@ -675,7 +687,7 @@ static void cf_check dump_numa(unsigned char key)
         mfn_t mfn = _mfn(node_start_pfn(i) + 1);
 
         printk("NODE%u start->%lu size->%lu free->%lu\n",
-               i, node_start_pfn(i), node_spanned_pages(i),
+               i, node_start_pfn(i), node_present_pages(i),
                avail_node_heap_pages(i));
         /* Sanity check mfn_to_nid() */
         if ( node_spanned_pages(i) > 1 && mfn_to_nid(mfn) != i )
