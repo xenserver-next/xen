@@ -140,6 +140,18 @@ bool __init numa_memblks_available(void)
 }
 
 /*
+ * @brief Update the memory blocks of a NUMA node.
+ *
+ * Check for overlaps and interleaves with existing memory blocks for the node.
+ * If none, update the node's memory range and maintain the sorting of blocks.
+ *
+ * @param node The node ID for which memory blocks are being updated.
+ * @param arch_nid The architecture node ID associated with the memory.
+ * @param start The starting physical address of the memory block.
+ * @param size The size of the memory block.
+ * @param hotplug Indicates if the memory is being hotplugged.
+ * @return true if the memory block was successfully added, false otherwise.
+ *
  * This function will be called by NUMA memory affinity initialization to
  * update NUMA node's memory range. In this function, we assume all memory
  * regions belonging to a single node are in one chunk. Holes (or MMIO
@@ -264,8 +276,17 @@ bool __init numa_update_node_memblks(nodeid_t node, unsigned int arch_nid,
 }
 
 /*
+ * @brief Check if all RAM ranges are covered by NUMA nodes.
+ *
  * Sanity check to catch more bad SRATs (they are amazingly common).
  * Make sure the PXMs cover all memory.
+ *
+ * This function iterates through the memory map and checks if each RAM range
+ * is covered by any of the NUMA nodes. If a RAM range is not covered by any
+ * node, it logs an error and returns false. If all RAM ranges are covered,
+ * it returns true.
+ *
+ * @return true if all RAM ranges are covered by NUMA nodes, false otherwise.
  */
 static bool __init nodes_cover_memory(void)
 {
@@ -291,18 +312,20 @@ static bool __init nodes_cover_memory(void)
 
         do {
             found = false;
+            /* Loop over the NUMA nodes and if check they cover this mapping */
             for_each_node_mask ( j, memory_nodes_parsed )
+                /* Check if this node's spanned pages are inside this mapping */
                 if ( start < numa_nodes[j].end && end > numa_nodes[j].start )
                 {
                     if ( start >= numa_nodes[j].start )
                     {
-                        start = numa_nodes[j].end;
+                        start = numa_nodes[j].end;  /* Check following memory */
                         found = true;
                     }
 
                     if ( end <= numa_nodes[j].end )
                     {
-                        end = numa_nodes[j].start;
+                        end = numa_nodes[j].start;  /* check preceding memory */
                         found = true;
                     }
                 }
