@@ -510,7 +510,7 @@ static long outstanding_claims; /* total outstanding claims by all domains */
  *
  * Return: true if the claims were successfully updated, false otherwise.
  */
-static bool update_node_outstanding_claims_locked(struct domain *d, long pages)
+bool update_node_outstanding_claims_locked(struct domain *d, long pages)
 {
     int nr_affinity_online_nodes, per_node_change;
     nodeid_t node;

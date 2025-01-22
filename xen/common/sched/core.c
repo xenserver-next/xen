@@ -1839,6 +1839,10 @@ void domain_update_node_aff(struct domain *d, struct affinity_masks *affinity)
      */
     if ( d->auto_node_affinity )
     {
+        /* Clear claim for outstanding pages, re-add it after the auto-set */
+        if (d->outstanding_pages)
+            update_node_outstanding_claims_locked(d, d->outstanding_pages);
+
         /*
          * We want the narrowest possible set of pcpus (to get the narowest
          * possible set of nodes). What we need is the cpumask of where the
@@ -1867,6 +1871,10 @@ void domain_update_node_aff(struct domain *d, struct affinity_masks *affinity)
         nodes_clear(d->node_affinity);
         for_each_cpu ( cpu, dom_affinity )
             node_set(cpu_to_node(cpu), d->node_affinity);
+
+        /* Re-add claim for outstanding pages for the updated node_affinity */
+        if (d->outstanding_pages)
+            update_node_outstanding_claims_locked(d, d->outstanding_pages);
     }
 
     spin_unlock(&d->node_affinity_lock);
