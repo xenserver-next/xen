@@ -525,6 +525,7 @@ void __init setup_node_bootmem(nodeid_t nodeid, paddr_t start, paddr_t end)
     node->node_start_pfn = start_pfn;
     node->node_spanned_pages = end_pfn - start_pfn;
     node->node_present_pages = 0;
+    node->node_outstanding_claims = 0;
 
     /* Calculate the number of present RAM pages within the node */
     do {

@@ -305,6 +305,11 @@ long do_sysctl(XEN_GUEST_HANDLE_PARAM(xen_sysctl_t) u_sysctl)
         if ( do_meminfo || do_distance )
         {
             struct xen_sysctl_meminfo meminfo = { };
+            uint64_t systemwide_claims, dummy;
+            int online_nodes = num_online_nodes();
+
+            if ( do_meminfo )
+                get_outstanding_claims(&dummy, &systemwide_claims);
 
             if ( num_nodes > ni->num_nodes )
                 num_nodes = ni->num_nodes;
@@ -318,7 +323,12 @@ long do_sysctl(XEN_GUEST_HANDLE_PARAM(xen_sysctl_t) u_sysctl)
                     {
                         /* Report the present node memory (exclusive holes) */
                         meminfo.memsize = node_present_pages(i) << PAGE_SHIFT;
-                        meminfo.memfree = avail_node_heap_pages(i) << PAGE_SHIFT;
+                        meminfo.memfree = avail_node_heap_pages(i);
+                        /* Reduce reported memfree by claims on this NUMA node */
+                        meminfo.memfree -= node_outstanding_claims(i);
+                        /* Reduce reported memfree by the system-wide claims */
+                        meminfo.memfree -= systemwide_claims / online_nodes;
+                        meminfo.memfree <<= PAGE_SHIFT;
                     }
                     else
                         meminfo.memsize = meminfo.memfree = XEN_INVALID_MEM_SZ;

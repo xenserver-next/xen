@@ -281,6 +281,7 @@ extern nodemask_t node_online_map;
 #define num_online_nodes()	nodes_weight(node_online_map)
 #define node_online(node)	nodemask_test(node, &node_online_map)
 #else
+#define nodes_full(nodemap)	1 /* skip node specific code for !NUMA config */
 #define num_online_nodes()	1
 #define node_online(node)	((node) == 0)
 #endif

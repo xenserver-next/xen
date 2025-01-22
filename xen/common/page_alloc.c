@@ -488,6 +488,102 @@ static long total_avail_pages;
 static DEFINE_SPINLOCK(heap_lock);
 static long outstanding_claims; /* total outstanding claims by all domains */
 
+/**
+ * Update the outstanding claims for the NUMA nodes of a domain.
+ *
+ * @d: Pointer to the domain structure
+ * @pages: Number of pages to be claimed or released
+ *
+ * This function updates the outstanding claims for the nodes associated with
+ * the given domain. It first checks if the domain's node affinity is full, in
+ * which case the function returns true. If NUMA is not compiled nodes_full is
+ * returns 1 and the function is optimized out. The function then it locks
+ * the node affinity to prevent changes and calculates the number of nodes
+ * with claims. If there are no nodes with claims, it unlocks and returns true.
+ *
+ * The function then calculates the per-node change in claims and checks if
+ * each node has enough available pages to satisfy the change. If any node
+ * does not have enough available pages, the function unlocks and returns false.
+ *
+ * If all nodes have enough available pages, the function applies the change
+ * to the outstanding claims for each node and unlocks before returning true.
+ *
+ * Return: true if the claims were successfully updated, false otherwise.
+ */
+static bool update_node_outstanding_claims_locked(struct domain *d, long pages)
+{
+    int nr_affinity_online_nodes, per_node_change;
+    nodeid_t node;
+    nodemask_t node_affinity_online_nodes;
+
+    ASSERT(spin_is_locked(&d->node_affinity_lock));
+    if ( nodes_full(d->node_affinity) ) /* re-check under lock */
+        return true; /* no node affinity means the claim is system-wide */
+
+    nodes_and(node_affinity_online_nodes, node_online_map, d->node_affinity);
+    nr_affinity_online_nodes = nodes_weight(node_affinity_online_nodes);
+    if ( !nr_affinity_online_nodes )
+        return false; /* no online nodes in the domain's node_affinity */
+
+    per_node_change = pages / nr_affinity_online_nodes;
+    for_each_node_mask(node, node_affinity_online_nodes)
+    {
+        /* Check if nodes have enough unclaimed pages to satisfy the change */
+        unsigned long node_avail = avail_node_heap_pages(node);
+        if (per_node_change > node_avail - node_outstanding_claims(node))
+            return false;  /* not enough unclaimed pages on this NUMA node */
+    }
+
+    /* Apply the change of the claim to the affinity nodes of the domain */
+    for_each_node_mask(node, d->node_affinity)
+        node_outstanding_claims(node) -= per_node_change;
+    return true;
+}
+
+static bool update_node_outstanding_claims(struct domain *d, long pages)
+{
+    int ret = true;
+
+    /* When the domain does not have node_affinity: Skip the lock and return */
+    if ( !nodes_full(d->node_affinity) ) { /* Fast check without taking lock */
+        spin_lock(&d->node_affinity_lock);
+        ret = update_node_outstanding_claims_locked(d, pages);
+        spin_unlock(&d->node_affinity_lock);
+    }
+    return ret;
+}
+
+/**
+ * When memory has been claimed for a domain but not yet allocated,
+ * the domain's outstanding claims are stored in the domain structure.
+ *
+ * When memory is allocated to a domain, the domain's outstanding claims
+ * are adjusted by subtracting the new pages from d->outstanding pages.
+ *
+ * In case memory is freed, the domain's outstanding claims are adjusted
+ * by adding the freed pages to d->outstanding pages.
+ *
+ * When a domain has a node affinity, the node's outstanding claims are stored
+ * in the NUMA node's node_data structure, and are adjusted accordingly.
+ *
+ * The system-wide number of outstanding pages is adjusted accordingly as well.
+ *
+ * TODO: Like done for memory allocations in get_free_buddy(), spread the
+ * NUMA memory claim across the NUMA nodes in the node_affinity nodeset.
+ *
+ * @param d: Pointer to the domain structure.
+ * @param pages: The number of pages to add (can be negative to subtract pages).
+ *
+ * @return The new total number of pages allocated to the domain.
+ *
+ * Note:
+ * - This function assumes that the domain's page allocation lock
+ *   (d->page_alloc_lock) is already held.
+ * - The function ensures that the outstanding pages for the domain and
+ *   the system do not go negative.
+ * - If the domain has no outstanding pages, the function simply adjusts
+ *   the total pages and returns.
+ */
 unsigned long domain_adjust_tot_pages(struct domain *d, long pages)
 {
     long dom_before, dom_after, dom_claimed, sys_before, sys_after;
@@ -515,12 +611,31 @@ unsigned long domain_adjust_tot_pages(struct domain *d, long pages)
     sys_after = sys_before - (dom_before - dom_claimed);
     BUG_ON(sys_after < 0);
     outstanding_claims = sys_after;
+    /* If the domain has a node affinity, update the node's outstanding pages. */
+    update_node_outstanding_claims(d, dom_before - dom_claimed);
     spin_unlock(&heap_lock);
 
 out:
     return d->tot_pages;
 }
 
+/**
+ * domain_set_outstanding_pages - Set or unset the outstanding page claim for a domain.
+ * @d: Pointer to the domain structure.
+ * @pages: Number of pages to claim. If 0, the claim is unset.
+ * @node: Node identifier (unused in this function).
+ *
+ * This function sets or unsets the outstanding page claim for a domain. If the
+ * number of pages to claim is zero, the current claim is unset. Otherwise, it
+ * checks if the domain already has an outstanding claim or if the requested
+ * pages exceed the domain's maximum pages or are less than or equal to the
+ * total pages already allocated to the domain. If the claim is valid and fits
+ * within the available memory, it updates the domain's outstanding pages and
+ * the global outstanding claims.
+ *
+ * Return: 0 on success, -ENOMEM if there is not enough memory, or -EINVAL if
+ * the claim is invalid.
+ */
 int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
 {
     int ret = -ENOMEM;
@@ -538,6 +653,8 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
     if ( pages == 0 )
     {
         outstanding_claims -= d->outstanding_pages;
+        update_node_outstanding_claims(d, -d->outstanding_pages);
+
         d->outstanding_pages = 0;
         ret = 0;
         goto out;
@@ -567,7 +684,7 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
      * then the claim must take domain_tot_pages() into account
      */
     claim = pages - domain_tot_pages(d);
-    if ( claim > avail_pages )
+    if ( claim > avail_pages || !update_node_outstanding_claims(d, claim))
         goto out;
 
     /* yay, claim fits in available memory, stake the claim, success! */
@@ -2612,6 +2729,15 @@ int assign_pages(
             goto out;
         }
 
+        /* Update domain's total pages and outstanding claims on the system */
+        /*
+         * FIXME: Reducing the outstanding claims for NUMA nodes currently
+         * assumes that d->node_affinity was successfully used to allocate
+         * the pages from the d->node_affinity nodes. But there are also other
+         * allocations and vNUMA allocations using MEMF flags. To support this
+         * correctly, we've to check on which NUMA node(s) the pages have been
+         * allocated and reduce the outstanding pages for those nodes instead.
+         */
         if ( unlikely(domain_adjust_tot_pages(d, nr) == nr) )
             get_knownalive_domain(d);
     }
