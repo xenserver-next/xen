@@ -128,6 +128,7 @@ mfn_t xen_map_to_mfn(unsigned long va);
  */
 int populate_pt_range(unsigned long virt, unsigned long nr_mfns);
 /* Claim handling */
+bool update_node_outstanding_claims_locked(struct domain *d, long pages);
 unsigned long __must_check domain_adjust_tot_pages(struct domain *d,
     long pages);
 int domain_set_outstanding_pages(struct domain *d, unsigned long pages);
