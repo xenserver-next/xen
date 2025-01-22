@@ -2654,6 +2654,20 @@ void init_domheap_pages(paddr_t ps, paddr_t pe)
 }
 
 
+/**
+ * assign_pages - Assigns a number of pages to a domain.
+ * @pg: Pointer to an array of page_info structures of pages to be assigned.
+ * @nr: Number of pages to be assigned.
+ * @d: Pointer to the domain to which the pages will be assigned.
+ * @memflags: Memory allocation flags.
+ *
+ * This function assigns a specified number of pages to a given domain. It performs
+ * various checks to ensure the domain is not dying, the allocation does not exceed
+ * the domain's maximum allowed pages, and the total pages do not overflow. It also
+ * handles reference counting and updates the domain's page lists accordingly.
+ *
+ * Return: 0 on success, or a negative error code on failure.
+ */
 int assign_pages(
     struct page_info *pg,
     unsigned int nr,
@@ -2758,12 +2772,39 @@ int assign_pages(
     return rc;
 }
 
+/**
+ * assign_page - Assigns a single page to a domain with specified memory flags
+ * @pg: Pointer to the page_info structure representing the page to be assigned
+ * @order: order of the page to be assigned (log base 2 of the number of pages)
+ * @d: Pointer to the domain structure to which the page will be assigned
+ * @memflags: Memory flags specifying the properties of the page assignment
+ *
+ * This function assigns a single page (specified by the page_info structure)
+ * to a given domain with the provided memory flags. It internally calls the
+ * assign_pages function with the number of pages calculated as 1 << order.
+ *
+ * Return: 0 on success, or a negative error code on failure.
+ */
 int assign_page(struct page_info *pg, unsigned int order, struct domain *d,
                 unsigned int memflags)
 {
     return assign_pages(pg, 1U << order, d, memflags);
 }
 
+/**
+ * alloc_domheap_pages - Allocate domain heap pages
+ * @d: Pointer to the domain structure
+ * @order: Order of the pages to allocate
+ * @memflags: Memory allocation flags
+ *
+ * This function allocates pages from the domain heap. It takes into account
+ * various memory allocation flags and domain-specific constraints.
+ * It supports colored allocation for domains if LLC coloring is enabled.
+ * It also handles DMA constraints and ensures proper page assignment and
+ * reference counting.
+ *
+ * Return: Pointer to the allocated page_info structure, or NULL on failure.
+ */
 struct page_info *alloc_domheap_pages(
     struct domain *d, unsigned int order, unsigned int memflags)
 {
@@ -2812,8 +2853,9 @@ struct page_info *alloc_domheap_pages(
                 pg[i].count_info = PGC_extra;
             }
         }
-        if ( assign_page(pg, order, d, memflags) )
+        if ( assign_page(pg, order, d, memflags) ) /* Assign page to domain */
         {
+            /* Free the pages if the assignment fails and return NULL */
             free_heap_pages(pg, order, memflags & MEMF_no_scrub);
             return NULL;
         }
