@@ -26,9 +26,9 @@
  * (e.g. adding semantics to 0-checked input fields or data to zeroed output
  * fields) don't require a change of the version.
  *
- * Last version bump: Xen 4.17
+ * Last version bump: Xen 4.20
  */
-#define XEN_SYSCTL_INTERFACE_VERSION 0x00000015
+#define XEN_SYSCTL_INTERFACE_VERSION 0x00000016
 
 /*
  * Read console content from Xen buffer ring.
