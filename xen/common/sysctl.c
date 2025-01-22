@@ -316,7 +316,8 @@ long do_sysctl(XEN_GUEST_HANDLE_PARAM(xen_sysctl_t) u_sysctl)
                 {
                     if ( node_online(i) )
                     {
-                        meminfo.memsize = node_spanned_pages(i) << PAGE_SHIFT;
+                        /* Report the present node memory (exclusive holes) */
+                        meminfo.memsize = node_present_pages(i) << PAGE_SHIFT;
                         meminfo.memfree = avail_node_heap_pages(i) << PAGE_SHIFT;
                     }
                     else
