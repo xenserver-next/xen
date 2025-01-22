@@ -70,6 +70,14 @@ extern nodeid_t *memnodemap;
 
 /* The memory information of NUMA nodes in the node_data[] array */
 struct node_data {
+    /*
+     * The total outstanding claims by all domains on this NUMA node.
+     * Currently, this has the amount of pages claimed for domains which have
+     * this node in its node_affinity, but have not yet been allocated.
+     * Needs locking to serialize updates, but has not yet been implemented.
+     */
+    unsigned long node_outstanding_claims;
+
     /* The starting page frame number (lowest pfn) of the NUMA node */
     unsigned long node_start_pfn;
 
@@ -88,6 +96,15 @@ struct node_data {
     unsigned long node_present_pages;
 };
 
+/**
+ * The node_data array is an array of node_data structures, one for each node.
+ * It is used used to store the memory information of NUMA nodes in the system.
+ * and is indexed by the node number, which is the same as the NUMA node ID.
+ *
+ * Each node_data structure contains the starting page frame number of the node,
+ * the total number of pages spanned by the node, and the amount of outstanding
+ * claimed memory pages by all domains on the node.
+ */
 extern struct node_data node_data[];
 
 static inline nodeid_t mfn_to_nid(mfn_t mfn)
@@ -103,6 +120,12 @@ static inline nodeid_t mfn_to_nid(mfn_t mfn)
 }
 
 #define NODE_DATA(nid)          (&node_data[nid])
+
+/**
+ * The node_outstanding_claims macro is used to access the node's outstanding
+ * claims in the node_data structure.
+ */
+#define node_outstanding_claims(nid) NODE_DATA(nid)->node_outstanding_claims
 
 #define node_start_pfn(nid)     (NODE_DATA(nid)->node_start_pfn)
 #define node_spanned_pages(nid) (NODE_DATA(nid)->node_spanned_pages)
@@ -137,6 +160,8 @@ extern void numa_set_processor_nodes_parsed(nodeid_t node);
 #define arch_want_default_dmazone() false
 
 extern mfn_t first_valid_mfn;
+
+#define node_outstanding_claims(nid) nid /* dummy to silence warnings, not used. */
 
 #define node_spanned_pages(nid) (max_page - mfn_x(first_valid_mfn))
 #define node_present_pages(nid) total_pages

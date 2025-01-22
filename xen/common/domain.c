@@ -942,6 +942,12 @@ void __init setup_system_domains(void)
 
 int domain_set_node_affinity(struct domain *d, const nodemask_t *affinity)
 {
+    /* If a domain has an outstanding claim, drop the claim before changing
+     * the node affinity of the domain. Afterwards, re-claim the claim. */
+    if ( d->outstanding_pages )
+        /* Moving claims not implemented yet: unclaim and then reclaim */
+        return -EBUSY;
+
     /* Being disjoint with the system is just wrong. */
     if ( !nodes_intersects(*affinity, node_online_map) )
         return -EINVAL;
