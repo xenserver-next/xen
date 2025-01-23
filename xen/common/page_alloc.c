@@ -1066,6 +1066,13 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
             /* When we have tried all in nodemask, we fall back to others. */
             if ( (memflags & MEMF_exact_node) || nodemask_retry++ )
                 return NULL;
+            /*
+             * FIXME: This hopefully a rare case, but we should nonetheless
+             * prefer to allocate from nodes near to the requested node(s)
+             * (preferably in the same package or at least directly connected)
+             * to minimize the performance impact of the resulting remote
+             * memory accesses when the domain accesses the remote memory.
+             */
             nodes_andnot(nodemask, node_online_map, nodemask);
             first = node = first_node(nodemask);
             if ( node >= MAX_NUMNODES )
