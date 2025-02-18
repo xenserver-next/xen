@@ -252,9 +252,9 @@ int libxl__build_pre(libxl__gc *gc, uint32_t domid,
     /*
      * Check if the domain has any CPU or node affinity already. If not, try
      * to build up the latter via automatic NUMA placement. In fact, in case
-     * numa_place_domain() manage to find a placement, in info->nodemap is
+     * numa_place_domain() manage to find a placement, info->nodemap is
      * updated accordingly; if it does not manage, info->nodemap is just left
-     * alone. It is then the the subsequent call to
+     * alone. It is then the subsequent call to
      * libxl_domain_set_nodeaffinity() that enacts the actual placement.
      *
      * As far as scheduling is concerned, we achieve NUMA-aware scheduling
