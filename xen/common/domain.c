@@ -264,7 +264,7 @@ static int vcpu_teardown(struct vcpu *v)
 }
 
 /*
- * Destoy a vcpu once all references to it have been dropped.  Used either
+ * Destroy a vcpu once all references to it have been dropped.  Used either
  * from domain_destroy()'s RCU path, or from the vcpu_create() error path
  * before the vcpu is placed on the domain's vcpu list.
  */
