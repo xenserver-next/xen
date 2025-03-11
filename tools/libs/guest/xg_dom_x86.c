@@ -1199,6 +1199,7 @@ static int meminit_pv(struct xc_dom_image *dom)
     if ( dom->claim_enabled )
     {
         rc = xc_domain_claim_pages(dom->xch, dom->guest_domid,
+                                   XC_NUMA_NO_NODE,
                                    dom->total_pages);
         if ( rc )
             return rc;
@@ -1327,7 +1328,8 @@ static int meminit_pv(struct xc_dom_image *dom)
 
     /* Ensure no unclaimed pages are left unused.
      * OK to call if hadn't done the earlier claim call. */
-    xc_domain_claim_pages(dom->xch, dom->guest_domid, 0 /* cancel claim */);
+    xc_domain_claim_pages(dom->xch, dom->guest_domid, XC_NUMA_NO_NODE,
+                          0 /* cancel claim */);
 
     return rc;
 }
@@ -1442,7 +1444,7 @@ static int meminit_hvm(struct xc_dom_image *dom)
      * allocated is pointless.
      */
     if ( claim_enabled ) {
-        rc = xc_domain_claim_pages(xch, domid,
+        rc = xc_domain_claim_pages(xch, domid, XC_NUMA_NO_NODE,
                                    target_pages - dom->vga_hole_size);
         if ( rc != 0 )
         {
@@ -1642,7 +1644,7 @@ static int meminit_hvm(struct xc_dom_image *dom)
  out:
 
     /* ensure no unclaimed pages are left unused */
-    xc_domain_claim_pages(xch, domid, 0 /* cancels the claim */);
+    xc_domain_claim_pages(xch, domid, XC_NUMA_NO_NODE, 0 /* cancel claim */);
 
     return rc;
 }

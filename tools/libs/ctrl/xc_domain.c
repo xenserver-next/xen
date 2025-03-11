@@ -20,6 +20,7 @@
  */
 
 #include "xc_private.h"
+#include "xenguest.h"
 #include <xen/memory.h>
 #include <xen/hvm/hvm_op.h>
 
@@ -1072,13 +1073,23 @@ int xc_domain_remove_from_physmap(xc_interface *xch,
 
 int xc_domain_claim_pages(xc_interface *xch,
                                uint32_t domid,
+                               unsigned int node,
                                unsigned long nr_pages)
 {
     int err;
+    unsigned int mem_flags = 0;
+
+    if ( node != XC_NUMA_NO_NODE )
+    {
+        if ( node >= 0xFF )
+            return -EINVAL;
+        mem_flags = XENMEMF_exact_node(node);
+    }
+
     struct xen_memory_reservation reservation = {
         .nr_extents   = nr_pages,
         .extent_order = 0,
-        .mem_flags    = 0, /* no flags */
+        .mem_flags    = mem_flags,
         .domid        = domid
     };
 
