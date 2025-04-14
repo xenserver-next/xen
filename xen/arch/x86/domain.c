@@ -530,7 +530,7 @@ struct vcpu *alloc_vcpu_struct(const struct domain *d)
         (is_hvm_domain(d) && paging_mode_shadow(d)) ? MEMF_bits(32) : 0;
 
     BUILD_BUG_ON(sizeof(*v) > PAGE_SIZE);
-    v = alloc_xenheap_pages(0, memflags);
+    v = alloc_xenheap_pages(0, memflags | MEMF_node(domain_to_node(d)));
     if ( v != NULL )
         clear_page(v);
     return v;

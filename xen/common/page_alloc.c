@@ -488,17 +488,104 @@ static long total_avail_pages;
 static DEFINE_SPINLOCK(heap_lock);
 static long outstanding_claims; /* total outstanding claims by all domains */
 
-unsigned long domain_adjust_tot_pages(struct domain *d, long pages)
+/**
+ * Update the outstanding claims for the NUMA nodes of a domain.
+ *
+ * @d: Pointer to the domain structure
+ * @pages: Number of pages to be claimed or released
+ *
+ * This function updates the outstanding claims for the nodes associated with
+ * the given domain. It first checks if the domain's node affinity is full, in
+ * which case the function returns true. If NUMA is not compiled nodes_full is
+ * returns 1 and the function is optimized out. The function then it locks
+ * the node affinity to prevent changes and calculates the number of nodes
+ * with claims. If there are no nodes with claims, it unlocks and returns true.
+ *
+ * The function then calculates the per-node change in claims and checks if
+ * each node has enough available pages to satisfy the change. If any node
+ * does not have enough available pages, the function unlocks and returns false.
+ *
+ * If all nodes have enough available pages, the function applies the change
+ * to the outstanding claims for each node and unlocks before returning true.
+ *
+ * Return: true if the claims were successfully updated, false otherwise.
+ */
+bool update_node_outstanding_claims_locked(struct domain *d, long pages)
+{
+    int nr_affinity_online_nodes, per_node_change;
+    nodeid_t node;
+    nodemask_t node_affinity_online_nodes;
+
+    ASSERT(spin_is_locked(&d->node_affinity_lock));
+    if ( nodes_full(d->node_affinity) ) /* re-check under lock */
+        return true; /* no node affinity means the claim is system-wide */
+
+    nodes_and(node_affinity_online_nodes, node_online_map, d->node_affinity);
+    nr_affinity_online_nodes = nodes_weight(node_affinity_online_nodes);
+    if ( !nr_affinity_online_nodes )
+        return false; /* no online nodes in the domain's node_affinity */
+
+    per_node_change = pages / nr_affinity_online_nodes;
+    for_each_node_mask(node, node_affinity_online_nodes)
+    {
+        /* Check if nodes have enough unclaimed pages to satisfy the change */
+        unsigned long node_avail = avail_node_heap_pages(node);
+        if (per_node_change > node_avail - node_outstanding_claims(node))
+            return false;  /* not enough unclaimed pages on this NUMA node */
+    }
+
+    /* Apply the change of the claim to the affinity nodes of the domain */
+    for_each_node_mask(node, d->node_affinity)
+        node_outstanding_claims(node) -= per_node_change;
+    return true;
+}
+
+static bool update_node_outstanding_claims(struct domain *d, long pages)
+{
+    int ret = true;
+
+    /* When the domain does not have node_affinity: Skip the lock and return */
+    if ( !nodes_full(d->node_affinity) ) { /* Fast check without taking lock */
+        spin_lock(&d->node_affinity_lock);
+        ret = update_node_outstanding_claims_locked(d, pages);
+        spin_unlock(&d->node_affinity_lock);
+    }
+    return ret;
+}
+
+/**
+ * domain_adjust_tot_pages(struct domain *d, long pages)
+ * Adjust d->outstanding pages for functions that assign pages to a domain
+ * or unassign pages from one.
+ *
+ * When a domain has a node affinity, the node's outstanding claims are stored
+ * in the NUMA node's node_data structure, and are adjusted accordingly.
+ *
+ * The system-wide number of outstanding pages is adjusted accordingly as well.
+ *
+ * TODO: Like done for memory allocations in get_free_buddy(), spread the
+ * NUMA memory claim across the NUMA nodes in the node_affinity nodeset.
+ *
+ * @param d: Pointer to the domain structure.
+ * @param pg: struct page_info *pg The start of an array of of pages assign
+ * @param pages: The number of pages to add (can be negative to subtract pages).
+ *
+ * @return The new total number of pages allocated to the domain.
+ *
+ * This function:
+ * - asserts that the caller holds d->page_alloc_lock already
+ * - ensures d->outstanding_pages and system-wide claims do not go negative.
+ */
+unsigned long domain_adjust_tot_pages(struct domain *d, struct page *pg, long pages)
 {
     long dom_before, dom_after, dom_claimed, sys_before, sys_after;
 
     ASSERT(rspin_is_locked(&d->page_alloc_lock));
     d->tot_pages += pages;
-
     /*
-     * can test d->claimed_pages race-free because it can only change
-     * if d->page_alloc_lock and heap_lock are both held, see also
-     * domain_set_outstanding_pages below
+     * We test !d->outstanding_claims race-free here: We assert that we hold
+     * d->page_alloc_lock and it changes only with both d->page_alloc_lock
+     * and heap_lock held. See also domain_set_outstanding_pages() below.
      */
     if ( !d->outstanding_pages )
         goto out;
@@ -515,12 +602,31 @@ unsigned long domain_adjust_tot_pages(struct domain *d, long pages)
     sys_after = sys_before - (dom_before - dom_claimed);
     BUG_ON(sys_after < 0);
     outstanding_claims = sys_after;
+    /* If the domain has a node affinity, update the node's outstanding pages. */
+    update_node_outstanding_claims(d, dom_before - dom_claimed);
     spin_unlock(&heap_lock);
 
 out:
     return d->tot_pages;
 }
 
+/**
+ * domain_set_outstanding_pages - Set or unset the outstanding page claim for a domain.
+ * @d: Pointer to the domain structure.
+ * @pages: Number of pages to claim. If 0, the claim is unset.
+ * @node: Node identifier (unused in this function).
+ *
+ * This function sets or unsets the outstanding page claim for a domain. If the
+ * number of pages to claim is zero, the current claim is unset. Otherwise, it
+ * checks if the domain already has an outstanding claim or if the requested
+ * pages exceed the domain's maximum pages or are less than or equal to the
+ * total pages already allocated to the domain. If the claim is valid and fits
+ * within the available memory, it updates the domain's outstanding pages and
+ * the global outstanding claims.
+ *
+ * Return: 0 on success, -ENOMEM if there is not enough memory, or -EINVAL if
+ * the claim is invalid.
+ */
 int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
 {
     int ret = -ENOMEM;
@@ -538,6 +644,8 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
     if ( pages == 0 )
     {
         outstanding_claims -= d->outstanding_pages;
+        update_node_outstanding_claims(d, -d->outstanding_pages);
+
         d->outstanding_pages = 0;
         ret = 0;
         goto out;
@@ -567,7 +675,7 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
      * then the claim must take domain_tot_pages() into account
      */
     claim = pages - domain_tot_pages(d);
-    if ( claim > avail_pages )
+    if ( claim > avail_pages || !update_node_outstanding_claims(d, claim))
         goto out;
 
     /* yay, claim fits in available memory, stake the claim, success! */
@@ -859,7 +967,7 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
 {
     nodeid_t first, node = MEMF_get_node(memflags), req_node = node;
     nodemask_t nodemask = node_online_map;
-    unsigned int j, zone, nodemask_retry = 0;
+    unsigned int j, zone, nodemask_retry = 0, request = (1UL << order);
     struct page_info *pg;
     bool use_unscrubbed = (memflags & MEMF_no_scrub);
 
@@ -907,13 +1015,26 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
             if ( !avail[node] || (avail[node][zone] < (1UL << order)) )
                 continue;
 
+            /* Check if node has enough unclaimed pages to satisfy the alloc */
+            if ( avail[node][zone] - node_outstanding_claims(node) < request )
+            {
+                /*
+                 * This request exceeds the remaining unclaimed memory in this
+                 * [node][zone]:
+                 * Claimed memory is considered unavailable unless the request
+                 * is made by a domain with sufficient unclaimed pages.
+                 */
+                if ( !d || request > d->outstanding_pages ) )
+                    continue;  /* Try next [node][zone] (if possible) */
+            }
+
             /* Find smallest order which can satisfy the request. */
             for ( j = order; j <= MAX_ORDER; j++ )
             {
                 if ( (pg = page_list_remove_head(&heap(node, zone, j))) )
                 {
                     if ( pg->u.free.first_dirty == INVALID_DIRTY_IDX )
-                        return pg;
+                        goto success;
                     /*
                      * We grab single pages (order=0) even if they are
                      * unscrubbed. Given that scrubbing one page is fairly quick
@@ -922,7 +1043,7 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
                     if ( (order == 0) || use_unscrubbed )
                     {
                         check_and_stop_scrub(pg);
-                        return pg;
+                        goto success;
                     }
 
                     page_list_add_tail(pg, &heap(node, zone, j));
@@ -954,7 +1075,21 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
             if ( node >= MAX_NUMNODES )
                 return NULL;
         }
+    }  /* for ( ; ; ) */
+success:
+    if ( d && d->outstanding_pages )
+    /* Check if node has enough unclaimed pages to satisfy the alloc */
+    if ( avail[node][zone] - node_outstanding_claims(node) < request )
+    {
+        /*
+         * This request exceeds the remaining unclaimed memory in this
+         * [node][zone]:
+         * Claimed memory is considered unavailable unless the request
+         * is made by a domain with sufficient unclaimed pages.
+         */
+            continue;  /* Try next [node][zone] (if possible) */
     }
+    return pg;
 }
 
 /* Initialise fields which have other uses for free pages. */
@@ -2537,6 +2672,20 @@ void init_domheap_pages(paddr_t ps, paddr_t pe)
 }
 
 
+/**
+ * assign_pages - Assigns a number of pages to a domain.
+ * @pg: Pointer to an array of page_info structures of pages to be assigned.
+ * @nr: Number of pages to be assigned.
+ * @d: Pointer to the domain to which the pages will be assigned.
+ * @memflags: Memory allocation flags.
+ *
+ * This function assigns a specified number of pages to a given domain. It performs
+ * various checks to ensure the domain is not dying, the allocation does not exceed
+ * the domain's maximum allowed pages, and the total pages do not overflow. It also
+ * handles reference counting and updates the domain's page lists accordingly.
+ *
+ * Return: 0 on success, or a negative error code on failure.
+ */
 int assign_pages(
     struct page_info *pg,
     unsigned int nr,
@@ -2612,7 +2761,21 @@ int assign_pages(
             goto out;
         }
 
-        if ( unlikely(domain_adjust_tot_pages(d, nr) == nr) )
+        /* Update domain's total pages and outstanding claims on the system */
+        /*
+         * FIXME/TODO: Reducing the outstanding claims for NUMA nodes currently
+         * assumes that d->node_affinity was successfully used to allocate
+         * the pages from the d->node_affinity nodes. But there are also other
+         * allocations and vNUMA allocations using MEMF flags. To support this
+         * correctly, we've to check on which NUMA node(s) the pages have been
+         * allocated and reduce the outstanding pages for those nodes instead.
+         * TODO: If pages have been spread over multiple NUMA nodes, this has
+         * updating the outstanding pages for the NUMA nodes has to be done for
+         * each NUMA node separately. For this domain_adjust_tot_pages() gets
+         * the pointer to the pages, so it can get the node of eac pages using
+         * page_to_nid(pg);
+         */
+        if ( unlikely(domain_adjust_tot_pages(d, pg, nr) == nr) )
             get_knownalive_domain(d);
     }
 
@@ -2632,12 +2795,39 @@ int assign_pages(
     return rc;
 }
 
+/**
+ * assign_page - Assigns a single page to a domain with specified memory flags
+ * @pg: Pointer to the page_info structure representing the page to be assigned
+ * @order: order of the page to be assigned (log base 2 of the number of pages)
+ * @d: Pointer to the domain structure to which the page will be assigned
+ * @memflags: Memory flags specifying the properties of the page assignment
+ *
+ * This function assigns a single page (specified by the page_info structure)
+ * to a given domain with the provided memory flags. It internally calls the
+ * assign_pages function with the number of pages calculated as 1 << order.
+ *
+ * Return: 0 on success, or a negative error code on failure.
+ */
 int assign_page(struct page_info *pg, unsigned int order, struct domain *d,
                 unsigned int memflags)
 {
     return assign_pages(pg, 1U << order, d, memflags);
 }
 
+/**
+ * alloc_domheap_pages - Allocate domain heap pages
+ * @d: Pointer to the domain structure
+ * @order: Order of the pages to allocate
+ * @memflags: Memory allocation flags
+ *
+ * This function allocates pages from the domain heap. It takes into account
+ * various memory allocation flags and domain-specific constraints.
+ * It supports colored allocation for domains if LLC coloring is enabled.
+ * It also handles DMA constraints and ensures proper page assignment and
+ * reference counting.
+ *
+ * Return: Pointer to the allocated page_info structure, or NULL on failure.
+ */
 struct page_info *alloc_domheap_pages(
     struct domain *d, unsigned int order, unsigned int memflags)
 {
@@ -2686,8 +2876,9 @@ struct page_info *alloc_domheap_pages(
                 pg[i].count_info = PGC_extra;
             }
         }
-        if ( assign_page(pg, order, d, memflags) )
+        if ( assign_page(pg, order, d, memflags) ) /* Assign page to domain */
         {
+            /* Free the pages if the assignment fails and return NULL */
             free_heap_pages(pg, order, memflags & MEMF_no_scrub);
             return NULL;
         }

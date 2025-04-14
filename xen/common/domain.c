@@ -264,7 +264,7 @@ static int vcpu_teardown(struct vcpu *v)
 }
 
 /*
- * Destoy a vcpu once all references to it have been dropped.  Used either
+ * Destroy a vcpu once all references to it have been dropped.  Used either
  * from domain_destroy()'s RCU path, or from the vcpu_create() error path
  * before the vcpu is placed on the domain's vcpu list.
  */
@@ -942,6 +942,8 @@ void __init setup_system_domains(void)
 
 int domain_set_node_affinity(struct domain *d, const nodemask_t *affinity)
 {
+    unsigned int dom_outstanding_pages = d->outstanding_pages;
+
     /* Being disjoint with the system is just wrong. */
     if ( !nodes_intersects(*affinity, node_online_map) )
         return -EINVAL;
@@ -954,17 +956,25 @@ int domain_set_node_affinity(struct domain *d, const nodemask_t *affinity)
      */
     if ( nodes_full(*affinity) )
     {
+        /* Triggers domain_update_node_aff() to update d->node_affinity */
         d->auto_node_affinity = 1;
         goto out;
     }
 
+    if ( dom_outstanding_pages ) /* Clear the claim for the old affinity */
+        update_node_outstanding_claims_locked(d, -dom_outstanding_pages);
+
     d->auto_node_affinity = 0;
     d->node_affinity = *affinity;
 
+    if ( dom_outstanding_pages ) /* Re-add the claim for the new affinity */
+        update_node_outstanding_claims_locked(d, dom_outstanding_pages);
+
 out:
+
     spin_unlock(&d->node_affinity_lock);
 
-    domain_update_node_affinity(d);
+    domain_update_node_affinity(d); /* Updates d->node_affinity on auto_aff */
 
     return 0;
 }

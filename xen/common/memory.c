@@ -1669,7 +1669,8 @@ long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         if ( reservation.extent_order != 0 )
             return -EINVAL;
 
-        if ( reservation.mem_flags != 0 )
+        /* Allow passing a MEMF_node mask for NUMA node claims */
+        if ( reservation.mem_flags & ~MEMF_node_mask != 0 )
             return -EINVAL;
 
         d = rcu_lock_domain_by_id(reservation.domid);
