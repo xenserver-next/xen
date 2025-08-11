@@ -550,7 +550,7 @@ out:
 int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
 {
     int ret = -ENOMEM;
-    unsigned long claim, avail_pages;
+    unsigned long avail_pages;
 
     /*
      * take the domain's page_alloc_lock, else all d->tot_page adjustments
@@ -576,28 +576,21 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
         goto out;
     }
 
-    /* disallow a claim not exceeding domain_tot_pages() or above max_pages */
-    if ( (pages <= domain_tot_pages(d)) || (pages > d->max_pages) )
+    /* Don't claim past max_pages */
+    if ( (domain_tot_pages(d) + pages) > d->max_pages )
     {
         ret = -EINVAL;
         goto out;
     }
 
     /* how much memory is available? */
-    avail_pages = total_avail_pages;
+    avail_pages = total_avail_pages - outstanding_claims;
 
-    avail_pages -= outstanding_claims;
-
-    /*
-     * Note, if domain has already allocated memory before making a claim
-     * then the claim must take domain_tot_pages() into account
-     */
-    claim = pages - domain_tot_pages(d);
-    if ( claim > avail_pages )
+    if ( pages > avail_pages )
         goto out;
 
     /* yay, claim fits in available memory, stake the claim, success! */
-    d->outstanding_pages = claim;
+    d->outstanding_pages = pages;
     outstanding_claims += d->outstanding_pages;
     ret = 0;
 
