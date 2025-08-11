@@ -510,8 +510,14 @@ static unsigned long avail_heap_pages(
     return free_pages;
 }
 
+/*
+ * Update the total number of pages and outstanding claims of a domain.
+ * - When pages were freed, we do not increase outstanding claims.
+ */
 unsigned long domain_adjust_tot_pages(struct domain *d, long pages)
 {
+    unsigned long adjustment;
+
     ASSERT(rspin_is_locked(&d->page_alloc_lock));
     d->tot_pages += pages;
 
@@ -519,23 +525,22 @@ unsigned long domain_adjust_tot_pages(struct domain *d, long pages)
      * can test d->outstanding_pages race-free because it can only change
      * if d->page_alloc_lock and heap_lock are both held, see also
      * domain_set_outstanding_pages below
+     *
+     * If the domain has no outstanding claims (or we freed pages instead),
+     * we don't update outstanding claims and skip the claims adjustment.
      */
     if ( !d->outstanding_pages || pages <= 0 )
         goto out;
 
     spin_lock(&heap_lock);
     BUG_ON(outstanding_claims < d->outstanding_pages);
-    if ( d->outstanding_pages < pages )
-    {
-        /* `pages` exceeds the domain's outstanding count. Zero it out. */
-        outstanding_claims -= d->outstanding_pages;
-        d->outstanding_pages = 0;
-    }
-    else
-    {
-        outstanding_claims -= pages;
-        d->outstanding_pages -= pages;
-    }
+    /*
+     * Reduce claims by outstanding claims or pages (whichever is smaller):
+     * If allocated > outstanding, reduce the claims only by outstanding pages.
+     */
+    adjustment = min(d->outstanding_pages, (unsigned int)pages);
+    d->outstanding_pages -= adjustment;
+    outstanding_claims -= adjustment;
     spin_unlock(&heap_lock);
 
 out:
