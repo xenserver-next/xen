@@ -267,6 +267,36 @@ int get_domain_state(struct xen_domctl_get_domain_state *info, struct domain *d,
     return rc;
 }
 
+/* XEN_DOMCTL_claim_memory: Claim an amount of memory for a domain */
+int claim_memory(struct domain *d, const struct xen_domctl_claim_memory *uinfo)
+{
+    memory_claim_t claim;
+    int rc;
+
+    switch ( uinfo->nr_claims )
+    {
+        case 0:
+            /* Cancel existing claim. */
+            rc = domain_set_outstanding_pages(d, 0, 0);
+            break;
+
+        case 1:
+            /* Only single node claims supported at the moment. */
+            if ( copy_from_guest(&claim, uinfo->claims, 1) )
+                return -EFAULT;
+
+            rc = domain_set_outstanding_pages(d, claim.node,
+                                              claim.nr_pages);
+            break;
+
+        default:
+            rc = -EOPNOTSUPP;
+            break;
+    }
+
+    return rc;
+}
+
 static void __domain_finalise_shutdown(struct domain *d)
 {
     struct vcpu *v;
