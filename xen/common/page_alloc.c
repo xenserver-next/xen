@@ -486,8 +486,12 @@ static unsigned long node_need_scrub[MAX_NUMNODES];
 static unsigned long *avail[MAX_NUMNODES];
 static long total_avail_pages;
 
+/* Per-NUMA-node counts of free pages */
+static unsigned long per_node_avail_pages[MAX_NUMNODES];
+
 static DEFINE_SPINLOCK(heap_lock);
 static long outstanding_claims; /* total outstanding claims by all domains */
+static unsigned long per_node_outstanding_claims[MAX_NUMNODES];
 
 static unsigned long avail_heap_pages(
     unsigned int zone_lo, unsigned int zone_hi, unsigned int node)
@@ -510,8 +514,15 @@ static unsigned long avail_heap_pages(
     return free_pages;
 }
 
-unsigned long domain_adjust_tot_pages(struct domain *d, long pages)
+/*
+ * Update the total number of pages and outstanding claims of a domain.
+ * - When pages were freed, we do not increase outstanding claims.
+ */
+unsigned long domain_adjust_tot_pages(struct domain *d, nodeid_t node,
+                                      long pages)
 {
+    unsigned long adjustment;
+
     ASSERT(rspin_is_locked(&d->page_alloc_lock));
     d->tot_pages += pages;
 
@@ -519,33 +530,42 @@ unsigned long domain_adjust_tot_pages(struct domain *d, long pages)
      * can test d->outstanding_pages race-free because it can only change
      * if d->page_alloc_lock and heap_lock are both held, see also
      * domain_set_outstanding_pages below
+     *
+     * If the domain has no outstanding claims (or we freed pages instead),
+     * we don't update outstanding claims and skip the claims adjustment.
+     *
+     * Also don't update outstanding claims when the domain has node-specific
+     * claims, but the memory allocation was from a different NUMA node.
      */
-    if ( !d->outstanding_pages || pages <= 0 )
+    if ( !d->outstanding_pages || pages <= 0 ||
+         (d->claim_node != NUMA_NO_NODE && d->claim_node != node) )
         goto out;
 
     spin_lock(&heap_lock);
     BUG_ON(outstanding_claims < d->outstanding_pages);
-    if ( d->outstanding_pages < pages )
-    {
-        /* `pages` exceeds the domain's outstanding count. Zero it out. */
-        outstanding_claims -= d->outstanding_pages;
-        d->outstanding_pages = 0;
-    }
-    else
-    {
-        outstanding_claims -= pages;
-        d->outstanding_pages -= pages;
-    }
+    /*
+     * Reduce claims by outstanding claims or pages (whichever is smaller):
+     * If allocated > outstanding, reduce the claims only by outstanding pages.
+     */
+    adjustment = min(d->outstanding_pages, (unsigned int)pages);
+    d->outstanding_pages -= adjustment;
+    if ( d->claim_node != NUMA_NO_NODE ) /* adjust the static per-node claims */
+        per_node_outstanding_claims[d->claim_node] -= adjustment;
+    outstanding_claims -= adjustment;
     spin_unlock(&heap_lock);
 
 out:
     return d->tot_pages;
 }
 
-int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
+int domain_set_outstanding_pages(struct domain *d, nodeid_t node,
+                                 unsigned long pages)
 {
     int ret = -ENOMEM;
-    unsigned long claim, avail_pages;
+    unsigned long avail_pages;
+
+    if ( node != NUMA_NO_NODE && !node_online(node) )
+        return -EINVAL;
 
     /*
      * take the domain's page_alloc_lock, else all d->tot_page adjustments
@@ -559,6 +579,10 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
     if ( pages == 0 )
     {
         outstanding_claims -= d->outstanding_pages;
+
+        if ( d->claim_node != NUMA_NO_NODE )
+            per_node_outstanding_claims[d->claim_node] -= d->outstanding_pages;
+
         d->outstanding_pages = 0;
         ret = 0;
         goto out;
@@ -571,29 +595,36 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
         goto out;
     }
 
-    /* disallow a claim not exceeding domain_tot_pages() or above max_pages */
-    if ( (pages <= domain_tot_pages(d)) || (pages > d->max_pages) )
+    /* Don't claim past max_pages */
+    if ( (domain_tot_pages(d) + pages) > d->max_pages )
     {
         ret = -EINVAL;
         goto out;
     }
 
     /* how much memory is available? */
-    avail_pages = total_avail_pages;
+    avail_pages = total_avail_pages - outstanding_claims;
 
-    avail_pages -= outstanding_claims;
-
-    /*
-     * Note, if domain has already allocated memory before making a claim
-     * then the claim must take domain_tot_pages() into account
-     */
-    claim = pages - domain_tot_pages(d);
-    if ( claim > avail_pages )
+    /* This check can't be skipped for the NUMA case, or we may overclaim */
+    if ( pages > avail_pages )
         goto out;
 
+    if ( node != NUMA_NO_NODE )
+    {
+        avail_pages = per_node_avail_pages[node] - per_node_outstanding_claims[node];
+
+        if ( pages > avail_pages )
+            goto out;
+    }
+
     /* yay, claim fits in available memory, stake the claim, success! */
-    d->outstanding_pages = claim;
+    d->outstanding_pages = pages;
     outstanding_claims += d->outstanding_pages;
+    d->claim_node = node;
+
+    if ( node != NUMA_NO_NODE )
+        per_node_outstanding_claims[node] += pages;
+
     ret = 0;
 
 out:
@@ -931,7 +962,12 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
         zone = zone_hi;
         do {
             /* Check if target node can support the allocation. */
-            if ( !avail[node] || (avail[node][zone] < (1UL << order)) )
+            if ( !avail[node] || (avail[node][zone] < (1UL << order)) ||
+                 /* For host-wide allocations, skip nodes without enough
+                  * unclaimed memory. */
+                  (req_node == NUMA_NO_NODE && outstanding_claims &&
+                   ((per_node_avail_pages[node] -
+                     per_node_outstanding_claims[node]) < (1UL << order))) )
                 continue;
 
             /* Find smallest order which can satisfy the request. */
@@ -991,6 +1027,46 @@ static void init_free_page_fields(struct page_info *pg)
     page_set_owner(pg, NULL);
 }
 
+/*
+ * Check if a heap allocation is allowed (helper for alloc_heap_pages)
+ */
+static bool can_alloc(const struct domain *d, unsigned int memflags,
+                      unsigned long request)
+{
+    nodeid_t node = MEMF_get_node(memflags);
+
+    /* If the memflags did not give a node but the domain has node_affinity,
+     * the allocation would happen from the node_affinity, so use it to take
+     * advantage of the domain's preferred node and the claimed memory */
+    if ( node == NUMA_NO_NODE && d && d->claim_node != NUMA_NO_NODE )
+    {
+        nodemask_t claim_node_mask = nodemask_of_node(d->claim_node);
+
+        if (nodes_equal(claim_node_mask, node_online_map))
+            node = d->claim_node;
+    }
+
+    if ( outstanding_claims + request <= total_avail_pages && /* host-wide, */
+         (node == NUMA_NO_NODE || /* if the alloc is node-specific, then also */
+          per_node_outstanding_claims[node] + request <= /* check per-node */
+          per_node_avail_pages[node]) )
+        return true;
+
+    /*
+     * The requested allocation can only be satisfied by outstanding claims.
+     * Claimed memory is considered unavailable unless the request
+     * is made by a domain with sufficient unclaimed pages.
+     *
+     * Only allow if the allocation matches the available claims of the domain.
+     * For host-wide allocs and claims, node == d->claim_node == NUMA_NO_NODE.
+     *
+     * Only refcounted allocs attributed to domains may have been claimed:
+     * Not refcounted allocs cannot consume claimed memory.
+     */
+    return d && d->claim_node == node && d->outstanding_pages >= request &&
+           !(memflags & MEMF_no_refcount);
+}
+
 /* Allocate 2^@order contiguous pages. */
 static struct page_info *alloc_heap_pages(
     unsigned int zone_lo, unsigned int zone_hi,
@@ -1021,9 +1097,7 @@ static struct page_info *alloc_heap_pages(
      * Claimed memory is considered unavailable unless the request
      * is made by a domain with sufficient unclaimed pages.
      */
-    if ( (outstanding_claims + request > total_avail_pages) &&
-          ((memflags & MEMF_no_refcount) ||
-           !d || d->outstanding_pages < request) )
+    if ( !can_alloc(d, memflags, request) )
     {
         spin_unlock(&heap_lock);
         return NULL;
@@ -1068,6 +1142,8 @@ static struct page_info *alloc_heap_pages(
 
     ASSERT(avail[node][zone] >= request);
     avail[node][zone] -= request;
+    ASSERT(per_node_avail_pages[node] >= request);
+    per_node_avail_pages[node] -= request;
     total_avail_pages -= request;
     ASSERT(total_avail_pages >= 0);
 
@@ -1228,6 +1304,8 @@ static int reserve_offlined_page(struct page_info *head)
             continue;
 
         avail[node][zone]--;
+        ASSERT(per_node_avail_pages[node] > 0);
+        per_node_avail_pages[node]--;
         total_avail_pages--;
         ASSERT(total_avail_pages >= 0);
 
@@ -1552,6 +1630,7 @@ static void free_heap_pages(
     }
 
     avail[node][zone] += 1 << order;
+    per_node_avail_pages[node] += 1 << order;
     total_avail_pages += 1 << order;
     if ( need_scrub )
     {
@@ -2614,6 +2693,8 @@ int assign_pages(
 
     if ( !(memflags & MEMF_no_refcount) )
     {
+        nodeid_t node = page_to_nid(&pg[0]);
+
         if ( unlikely(d->tot_pages + nr < nr) )
         {
             gprintk(XENLOG_INFO,
@@ -2625,7 +2706,9 @@ int assign_pages(
             goto out;
         }
 
-        if ( unlikely(domain_adjust_tot_pages(d, nr) == nr) )
+        ASSERT(node == page_to_nid(&pg[nr - 1]));
+
+        if ( unlikely(domain_adjust_tot_pages(d, node, nr) == nr) )
             get_knownalive_domain(d);
     }
 
@@ -2758,7 +2841,8 @@ void free_domheap_pages(struct page_info *pg, unsigned int order)
                 }
             }
 
-            drop_dom_ref = !domain_adjust_tot_pages(d, -(1 << order));
+            drop_dom_ref = !domain_adjust_tot_pages(d, NUMA_NO_NODE,
+                                                    -(1 << order));
 
             rspin_unlock(&d->page_alloc_lock);
 
@@ -2964,7 +3048,7 @@ void free_domstatic_page(struct page_info *page)
 
     arch_free_heap_page(d, page);
 
-    drop_dom_ref = !domain_adjust_tot_pages(d, -1);
+    drop_dom_ref = !domain_adjust_tot_pages(d, NUMA_NO_NODE, -1);
 
     unprepare_staticmem_pages(page, 1, scrub_debug);
 
