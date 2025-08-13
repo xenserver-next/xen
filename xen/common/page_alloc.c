@@ -491,6 +491,7 @@ static unsigned long per_node_avail_pages[MAX_NUMNODES];
 
 static DEFINE_SPINLOCK(heap_lock);
 static long outstanding_claims; /* total outstanding claims by all domains */
+static unsigned long per_node_outstanding_claims[MAX_NUMNODES];
 
 static unsigned long avail_heap_pages(
     unsigned int zone_lo, unsigned int zone_hi, unsigned int node)
@@ -532,8 +533,12 @@ unsigned long domain_adjust_tot_pages(struct domain *d, nodeid_t node,
      *
      * If the domain has no outstanding claims (or we freed pages instead),
      * we don't update outstanding claims and skip the claims adjustment.
+     *
+     * Also don't update outstanding claims when the domain has node-specific
+     * claims, but the memory allocation was from a different NUMA node.
      */
-    if ( !d->outstanding_pages || pages <= 0 )
+    if ( !d->outstanding_pages || pages <= 0 ||
+         (d->claim_node != NUMA_NO_NODE && d->claim_node != node) )
         goto out;
 
     spin_lock(&heap_lock);
@@ -544,6 +549,8 @@ unsigned long domain_adjust_tot_pages(struct domain *d, nodeid_t node,
      */
     adjustment = min(d->outstanding_pages, (unsigned int)pages);
     d->outstanding_pages -= adjustment;
+    if ( d->claim_node != NUMA_NO_NODE ) /* adjust the static per-node claims */
+        per_node_outstanding_claims[d->claim_node] -= adjustment;
     outstanding_claims -= adjustment;
     spin_unlock(&heap_lock);
 
@@ -557,6 +564,9 @@ int domain_set_outstanding_pages(struct domain *d, nodeid_t node,
     int ret = -ENOMEM;
     unsigned long avail_pages;
 
+    if ( node != NUMA_NO_NODE && !node_online(node) )
+        return -EINVAL;
+
     /*
      * take the domain's page_alloc_lock, else all d->tot_page adjustments
      * must always take the global heap_lock rather than only in the much
@@ -569,6 +579,10 @@ int domain_set_outstanding_pages(struct domain *d, nodeid_t node,
     if ( pages == 0 )
     {
         outstanding_claims -= d->outstanding_pages;
+
+        if ( d->claim_node != NUMA_NO_NODE )
+            per_node_outstanding_claims[d->claim_node] -= d->outstanding_pages;
+
         d->outstanding_pages = 0;
         ret = 0;
         goto out;
@@ -591,12 +605,26 @@ int domain_set_outstanding_pages(struct domain *d, nodeid_t node,
     /* how much memory is available? */
     avail_pages = total_avail_pages - outstanding_claims;
 
+    /* This check can't be skipped for the NUMA case, or we may overclaim */
     if ( pages > avail_pages )
         goto out;
+
+    if ( node != NUMA_NO_NODE )
+    {
+        avail_pages = per_node_avail_pages[node] - per_node_outstanding_claims[node];
+
+        if ( pages > avail_pages )
+            goto out;
+    }
 
     /* yay, claim fits in available memory, stake the claim, success! */
     d->outstanding_pages = pages;
     outstanding_claims += d->outstanding_pages;
+    d->claim_node = node;
+
+    if ( node != NUMA_NO_NODE )
+        per_node_outstanding_claims[node] += pages;
+
     ret = 0;
 
 out:
@@ -934,7 +962,12 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
         zone = zone_hi;
         do {
             /* Check if target node can support the allocation. */
-            if ( !avail[node] || (avail[node][zone] < (1UL << order)) )
+            if ( !avail[node] || (avail[node][zone] < (1UL << order)) ||
+                 /* For host-wide allocations, skip nodes without enough
+                  * unclaimed memory. */
+                  (req_node == NUMA_NO_NODE && outstanding_claims &&
+                   ((per_node_avail_pages[node] -
+                     per_node_outstanding_claims[node]) < (1UL << order))) )
                 continue;
 
             /* Find smallest order which can satisfy the request. */
