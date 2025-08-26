@@ -225,6 +225,8 @@ class domain2
     setclaim
 # XEN_DOMCTL_cacheflush
     cacheflush
+# XEN_DOMCTL_claim_memory
+    claim_memory
 # Creation of the hardware domain when it is not dom0
     create_hardware_domain
 # XEN_DOMCTL_setvnumainfo

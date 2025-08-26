@@ -90,6 +90,7 @@ define(`create_domain_common', `
 		set_vnumainfo
 		get_vnumainfo
 		cacheflush
+		claim_memory
 		psr_cmt_op
 		psr_alloc
 		soft_reset
