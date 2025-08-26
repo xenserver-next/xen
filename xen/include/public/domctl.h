@@ -1243,6 +1243,21 @@ struct xen_domctl_set_llc_colors {
     XEN_GUEST_HANDLE_64(uint32) llc_colors;
 };
 
+struct xen_memory_claim {
+    unsigned int node;      /* NUMA node, XC_NUMA_NO_NODE for a host claim */
+    unsigned long nr_pages; /* Number of pages to claim */
+};
+typedef struct xen_memory_claim memory_claim_t;
+DEFINE_XEN_GUEST_HANDLE(memory_claim_t);
+
+/* XEN_DOMCTL_claim_memory: Claim an amount of memory for a domain */
+struct xen_domctl_claim_memory {
+    /* IN: array of memory claims */
+    XEN_GUEST_HANDLE_64(memory_claim_t) claims;
+    /* IN: number of claims */
+    unsigned int nr_claims;
+};
+
 struct xen_domctl {
     uint32_t cmd;
 #define XEN_DOMCTL_createdomain                   1
@@ -1333,6 +1348,7 @@ struct xen_domctl {
 #define XEN_DOMCTL_dt_overlay                    87
 #define XEN_DOMCTL_gsi_permission                88
 #define XEN_DOMCTL_set_llc_colors                89
+#define XEN_DOMCTL_claim_memory                  91
 #define XEN_DOMCTL_gdbsx_guestmemio            1000
 #define XEN_DOMCTL_gdbsx_pausevcpu             1001
 #define XEN_DOMCTL_gdbsx_unpausevcpu           1002
@@ -1387,6 +1403,7 @@ struct xen_domctl {
         struct xen_domctl_gdbsx_memio       gdbsx_guest_memio;
         struct xen_domctl_set_broken_page_p2m set_broken_page_p2m;
         struct xen_domctl_cacheflush        cacheflush;
+        struct xen_domctl_claim_memory      claim_memory;
         struct xen_domctl_gdbsx_pauseunp_vcpu gdbsx_pauseunp_vcpu;
         struct xen_domctl_gdbsx_domstatus   gdbsx_domstatus;
         struct xen_domctl_vnuma             vnuma;

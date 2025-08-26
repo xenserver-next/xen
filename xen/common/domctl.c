@@ -876,6 +876,14 @@ long do_domctl(XEN_GUEST_HANDLE_PARAM(xen_domctl_t) u_domctl)
             ret = -EOPNOTSUPP;
         break;
 
+    case XEN_DOMCTL_claim_memory:
+        ret = xsm_claim_pages(XSM_PRIV, d);
+        if ( ret )
+            break;
+
+        ret = claim_memory(d, &op->u.claim_memory);
+        break;
+
     default:
         ret = arch_do_domctl(op, d, u_domctl);
         break;
