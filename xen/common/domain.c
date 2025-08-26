@@ -683,6 +683,9 @@ struct domain *domain_create(domid_t domid,
     d->domain_id = domid;
     d->unique_id = get_unique_id();
 
+    /* no NUMA nodes claimed yet */
+    d->claim_node = NUMA_NO_NODE;
+
     /* Holding CDF_* internal flags. */
     d->cdf = flags;
 
