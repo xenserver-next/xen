@@ -490,6 +490,7 @@ static unsigned long per_node_avail_pages[MAX_NUMNODES];
 
 static DEFINE_SPINLOCK(heap_lock);
 static long outstanding_claims; /* total outstanding claims by all domains */
+static unsigned long per_node_outstanding_claims[MAX_NUMNODES];
 
 /*
  * Update the total number of pages and outstanding claims of a domain.
@@ -511,8 +512,12 @@ unsigned long domain_update_total_pages(
      *
      * If the domain has no outstanding claims (or we freed pages instead),
      * we don't update outstanding claims and skip the claims adjustment.
+     *
+     * Also don't update outstanding claims when the domain has node-specific
+     * claims, but the memory allocation was from a different NUMA node.
      */
-    if ( !d->outstanding_pages || pages <= 0 )
+    if ( !d->outstanding_pages || pages <= 0 ||
+         (d->claim_node != NUMA_NO_NODE && d->claim_node != node) )
         goto out;
 
     spin_lock(&heap_lock);
@@ -523,6 +528,11 @@ unsigned long domain_update_total_pages(
      */
     adjustment = min_t(unsigned long, d->outstanding_pages, pages);
     d->outstanding_pages -= adjustment;
+    if ( d->claim_node != NUMA_NO_NODE ) /* adjust the static per-node claims */
+    {
+        BUG_ON(adjustment > per_node_outstanding_claims[d->claim_node]);
+        per_node_outstanding_claims[d->claim_node] -= adjustment;
+    }
     outstanding_claims -= adjustment;
     spin_unlock(&heap_lock);
 
@@ -536,6 +546,9 @@ int domain_set_outstanding_pages(
     int ret = -ENOMEM;
     unsigned long claim, avail_pages;
 
+    if ( node != NUMA_NO_NODE && !node_online(node) )
+        return -ENOENT;
+
     /*
      * take the domain's page_alloc_lock, else all d->tot_page adjustments
      * must always take the global heap_lock rather than only in the much
@@ -548,6 +561,10 @@ int domain_set_outstanding_pages(
     if ( pages == 0 )
     {
         outstanding_claims -= d->outstanding_pages;
+
+        if ( d->claim_node != NUMA_NO_NODE )
+            per_node_outstanding_claims[d->claim_node] -= d->outstanding_pages;
+
         d->outstanding_pages = 0;
         ret = 0;
         goto out;
@@ -579,6 +596,18 @@ int domain_set_outstanding_pages(
     claim = pages - domain_tot_pages(d);
     if ( claim > avail_pages )
         goto out;
+
+    if ( node != NUMA_NO_NODE )
+    {
+        avail_pages = per_node_avail_pages[node] -
+                      per_node_outstanding_claims[node];
+
+        if ( claim > avail_pages )
+            goto out;
+
+        d->claim_node = node;
+        per_node_outstanding_claims[node] += claim;
+    }
 
     /* yay, claim fits in available memory, stake the claim, success! */
     d->outstanding_pages = claim;
@@ -914,7 +943,15 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
         zone = zone_hi;
         do {
             /* Check if target node can support the allocation. */
-            if ( !avail[node] || (avail[node][zone] < (1UL << order)) )
+            if ( !avail[node] || (avail[node][zone] < (1UL << order)) ||
+                 /*
+                  * For host-wide allocations, ensure we do not steal memory
+                  * from nodes without enough unclaimed memory available.
+                  */
+                  (d && d->claim_node == NUMA_NO_NODE &&
+                   per_node_outstanding_claims[node] > 0 &&
+                   ((per_node_avail_pages[node] -
+                     per_node_outstanding_claims[node]) < (1UL << order))) )
                 continue;
 
             /* Find smallest order which can satisfy the request. */
@@ -942,6 +979,37 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
 
         if ( (memflags & MEMF_exact_node) && req_node != NUMA_NO_NODE )
             return NULL;
+
+        /*
+         * We got a request that we cannot satisfy on the current node.
+         *
+         * If the domain has a claim, but we'd have to allocate elsewhere,
+         * fail, forcing smaller allocations on the claimed node.
+         *
+         * This ensures that domains with node-specific claims allocate
+         * as much as possible on their claimed node, even if it means
+         * to force meminit functions to do smaller allocations:
+         *
+         * For example, if a domain has a claim of 1GB on node 0, and then tries
+         * to allocate a 1GB superpage for which we have no 1GB superpage left
+         * on node 0, we fail rather than falling back to another node to
+         * to allocate the superpage.  meminit functions then
+         * fall back many to smaller allocations on the claimed node that
+         * should be possible given the claim, allowing the overall allocation
+         * of 1GB on the claimed node to succeed.
+         *
+         * In any case of a bug that would have led us to steal claimed memory
+         * from the NUMA node claim, we also rather surface the problem to the
+         * caller as in this case, ultimatively, we cannot fulfill the requests
+         * rather than silently allocating memory from other nodes.
+         *
+         * When the domain does not have a sufficient claim for the allocation
+         * e.g. when the domain has no claim after building the domain,
+         * we allow to fall back to other NUMA nodes.
+         */
+        if ( d && d->claim_node != NUMA_NO_NODE &&
+             (1UL << order) <= d->outstanding_pages )
+            return NULL; /* Force smaller allocations */
 
         /* Pick next node. */
         if ( !nodemask_test(node, &nodemask) )

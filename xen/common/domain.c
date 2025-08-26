@@ -729,6 +729,7 @@ struct domain *domain_create(domid_t domid,
     spin_lock_init(&d->node_affinity_lock);
     d->node_affinity = NODE_MASK_ALL;
     d->auto_node_affinity = 1;
+    d->claim_node = NUMA_NO_NODE;
 
     spin_lock_init(&d->shutdown_lock);
     d->shutdown_code = SHUTDOWN_CODE_INVALID;
