@@ -1024,6 +1024,48 @@ static void init_free_page_fields(struct page_info *pg)
     page_set_owner(pg, NULL);
 }
 
+/*
+ * Check if a heap allocation is allowed (helper for alloc_heap_pages)
+ */
+static bool can_alloc(const struct domain *d, unsigned int memflags,
+                      unsigned long request)
+{
+    nodeid_t node = MEMF_get_node(memflags);
+
+    /*
+     * If memflags don't define a node to allocate from, get_free_buddy() will
+     * use d->node_affinity for the allocation: Allow the allocation to
+     * take advantage of it when the claimed node is exactly d->node_affinity:
+     */
+    if ( node == NUMA_NO_NODE && d && d->claim_node != NUMA_NO_NODE )
+    {
+        nodemask_t claim_node = nodemask_of_node(d->claim_node);
+
+        if (nodes_equal(d->node_affinity, claim_node))
+            node = d->claim_node;
+    }
+
+    if ( outstanding_claims + request <= total_avail_pages && /* host-wide, */
+         (node == NUMA_NO_NODE || /* if the alloc is node-specific, then also */
+          per_node_outstanding_claims[node] + request <= /* check per-node */
+          per_node_avail_pages[node]) )
+        return true;
+
+    /*
+     * The requested allocation can only be satisfied by outstanding claims.
+     * Claimed memory is considered unavailable unless the request
+     * is made by a domain with sufficient unclaimed pages.
+     *
+     * Only allow if the allocation matches the available claims of the domain.
+     * For host-wide allocs and claims, node == d->claim_node == NUMA_NO_NODE.
+     *
+     * Only refcounted allocs attributed to domains may have been claimed:
+     * Not refcounted allocs cannot consume claimed memory.
+     */
+    return d && d->claim_node == node && d->outstanding_pages >= request &&
+           !(memflags & MEMF_no_refcount);
+}
+
 /* Allocate 2^@order contiguous pages. */
 static struct page_info *alloc_heap_pages(
     unsigned int zone_lo, unsigned int zone_hi,
@@ -1054,9 +1096,7 @@ static struct page_info *alloc_heap_pages(
      * Claimed memory is considered unavailable unless the request
      * is made by a domain with sufficient unclaimed pages.
      */
-    if ( (outstanding_claims + request > total_avail_pages) &&
-          ((memflags & MEMF_no_refcount) ||
-           !d || d->outstanding_pages < request) )
+    if ( !can_alloc(d, memflags, request) )
     {
         spin_unlock(&heap_lock);
         return NULL;
