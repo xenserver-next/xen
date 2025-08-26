@@ -207,6 +207,12 @@ end
 
 include module type of Runstateinfo.V1
 
+type domain_numainfo_node_pages = {
+  tot_pages_per_node : int64 array;
+}
+external domain_get_numa_info_node_pages : handle -> int -> domain_numainfo_node_pages
+  = "stub_xc_domain_numa_get_node_pages"
+
 external domain_sethandle : handle -> domid -> string -> unit = "stub_xc_domain_sethandle"
 external domain_max_vcpus : handle -> domid -> int -> unit
   = "stub_xc_domain_max_vcpus"

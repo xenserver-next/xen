@@ -1058,6 +1058,25 @@ struct xen_domctl_vcpu_msrs {
 };
 #endif
 
+/*
+ * Domain NUMA operations
+ * GET_NODE_PAGES: get the number of pages per NUMA node
+ */
+#define XEN_DOMCTL_NUMA_OP_GET_NODE_PAGES       0
+
+/* XEN_DOMCTL_numa_op */
+struct xen_domctl_numa_op {
+    /* IN */
+    uint32_t op;
+    /* IN/OUT */
+    union {
+        struct node_pages {
+            uint32_t nr_nodes; /* nodes written to node_tot_pages */
+            XEN_GUEST_HANDLE_64(uint64) node_tot_pages; /* IN/OUT */
+        } node_pages;
+    } u;
+};
+
 /* XEN_DOMCTL_setvnumainfo: specifies a virtual NUMA topology for the guest */
 struct xen_domctl_vnuma {
     /* IN: number of vNUMA nodes to setup. Shall be greater than 0 */
@@ -1381,6 +1400,10 @@ struct xen_domctl {
 #define XEN_DOMCTL_gdbsx_pausevcpu             1001
 #define XEN_DOMCTL_gdbsx_unpausevcpu           1002
 #define XEN_DOMCTL_gdbsx_domstatus             1003
+
+/* out-of-tree domctls */
+#define XEN_DOMCTL_numa_op                     1101
+
     uint32_t interface_version; /* XEN_DOMCTL_INTERFACE_VERSION */
     domid_t  domain;
     uint16_t _pad[3];
@@ -1445,6 +1468,7 @@ struct xen_domctl {
         struct xen_domctl_dt_overlay        dt_overlay;
 #endif
         struct xen_domctl_set_llc_colors    set_llc_colors;
+        struct xen_domctl_numa_op           numa_op;
         uint8_t                             pad[128];
     } u;
 };

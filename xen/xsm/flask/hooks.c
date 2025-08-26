@@ -847,6 +847,9 @@ static int cf_check flask_domctl(struct domain *d, unsigned int cmd,
     case XEN_DOMCTL_set_paging_mempool_size:
         return current_has_perm(d, SECCLASS_DOMAIN, DOMAIN__SETPAGINGMEMPOOL);
 
+    case XEN_DOMCTL_numa_op:
+        return current_has_perm(d, SECCLASS_DOMAIN2, DOMAIN2__NUMA_OP);
+
     case XEN_DOMCTL_dt_overlay:
         return current_has_perm(d, SECCLASS_DOMAIN2, DOMAIN2__DT_OVERLAY);
 

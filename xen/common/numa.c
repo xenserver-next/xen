@@ -5,6 +5,7 @@
  */
 
 #include <xen/init.h>
+#include <xen/guest_access.h>
 #include <xen/keyhandler.h>
 #include <xen/mm.h>
 #include <xen/nodemask.h>
@@ -703,10 +704,10 @@ static void cf_check dump_numa(unsigned char key)
         mfn_t mfn = _mfn(node_start_pfn(i) + 1);
 
         printk("NODE%u start->%lu size->%lu free->%lu\n",
-               i, node_start_pfn(i), node_spanned_pages(i),
+               i, node_start_pfn(i), node_present_pages(i),
                avail_node_heap_pages(i));
         /* Sanity check mfn_to_nid() */
-        if ( node_spanned_pages(i) > 1 && mfn_to_nid(mfn) != i )
+        if ( node_present_pages(i) > 1 && mfn_to_nid(mfn) != i )
             printk("mfn_to_nid(%"PRI_mfn") -> %d should be %u\n",
                    mfn_x(mfn), mfn_to_nid(mfn), i);
     }
@@ -737,26 +738,14 @@ static void cf_check dump_numa(unsigned char key)
     printk("Memory location of each domain:\n");
     for_each_domain ( d )
     {
-        const struct page_info *page;
-        unsigned int page_num_node[MAX_NUMNODES];
         const struct vnuma_info *vnuma;
 
         process_pending_softirqs();
 
         printk("%pd (total: %u):\n", d, domain_tot_pages(d));
 
-        memset(page_num_node, 0, sizeof(page_num_node));
-
-        nrspin_lock(&d->page_alloc_lock);
-        page_list_for_each ( page, &d->page_list )
-        {
-            i = page_to_nid(page);
-            page_num_node[i]++;
-        }
-        nrspin_unlock(&d->page_alloc_lock);
-
         for_each_online_node ( i )
-            printk("    Node %u: %u\n", i, page_num_node[i]);
+            printk("    Node %u: %u\n", i, d->node_tot_pages[i]);
 
         if ( !read_trylock(&d->vnuma_rwlock) )
             continue;
@@ -830,3 +819,59 @@ static int __init cf_check register_numa_trigger(void)
     return 0;
 }
 __initcall(register_numa_trigger);
+
+/**
+ * @brief Copy d->tot_pages_per_node[<node>] to guest memory.
+ * @param d The domain whose NUMA info is being retrieved.
+ * @param nodes The data structure to fill with total pages per node.
+ * @return 0 on success, negative error code on failure.
+ *
+ * This function copies the total number of pages per NUMA node
+ * from the host domain structure to the guest memory specified
+ * in the `node_pages` structure.
+ *
+ * It ensures that the number of nodes copied does not exceed
+ * the the passed `nr_nodes` value or the number of online nodes.
+ * On success, it updates `nr_nodes` to reflect the actual
+ * number of nodes copied.
+ */
+static int domain_get_node_tot_pages(struct domain *d, struct node_pages *nodes)
+{
+    uint32_t lastnode = last_node(node_online_map);
+    nodeid_t max_node = min(nodes->nr_nodes - 1, lastnode), node;
+
+    for ( node = 0; node <= max_node; node++ )
+    {
+        /*
+         * d->tot_pages_per_node[node] uses int (supports Xen's 16TB limit),
+         * but nodes->tot_pages_per_node is an array of uint64_t
+         * make the hypercall API future-proof for future >16TB host support,
+         * so we need to copy each element individually and convert it.
+         */
+        uint64_t pages = d->node_tot_pages[node];
+
+        if ( copy_to_guest_offset(nodes->node_tot_pages, node, &pages, 1) )
+            return -EFAULT;
+    }
+    nodes->nr_nodes = max_node + 1;
+    return 0;
+}
+
+/* Domain NUMA operations */
+int numa_domctl(
+    struct domain *d, struct xen_domctl_numa_op *numa, bool *copyback)
+{
+    int ret;
+
+    switch ( numa->op )
+    {
+    case XEN_DOMCTL_NUMA_OP_GET_NODE_PAGES:
+        ret = domain_get_node_tot_pages(d, &numa->u.node_pages);
+        *copyback = true;
+        break;
+    default:
+        ret = -EINVAL;
+    }
+
+    return ret;
+}

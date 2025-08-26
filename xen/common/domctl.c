@@ -880,7 +880,11 @@ long do_domctl(XEN_GUEST_HANDLE_PARAM(xen_domctl_t) u_domctl)
         else
             ret = -EOPNOTSUPP;
         break;
-
+#if defined(CONFIG_NUMA)
+    case XEN_DOMCTL_numa_op:
+        ret = numa_domctl(d, &op->u.numa_op, &copyback);
+        break;
+#endif
     default:
         ret = arch_do_domctl(op, d, u_domctl);
         break;
