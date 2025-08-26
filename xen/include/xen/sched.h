@@ -402,7 +402,7 @@ struct domain
 #endif
 
     /*
-     * This field should only be directly accessed by domain_adjust_tot_pages()
+     * This field should only be directly accessed by domain_update_total_pages()
      * and the domain_tot_pages() helper function defined below.
      */
     unsigned int     tot_pages;

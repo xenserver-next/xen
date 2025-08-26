@@ -66,6 +66,7 @@
 #include <xen/mm-frame.h>
 #include <xen/types.h>
 #include <xen/list.h>
+#include <xen/numa.h>
 #include <xen/spinlock.h>
 #include <xen/perfc.h>
 #include <public/memory.h>
@@ -127,10 +128,39 @@ mfn_t xen_map_to_mfn(unsigned long va);
  * page range in Xen virtual address space.
  */
 int populate_pt_range(unsigned long virt, unsigned long nr_mfns);
-/* Claim handling */
-unsigned long __must_check domain_adjust_tot_pages(struct domain *d,
-    long pages);
-int domain_set_outstanding_pages(struct domain *d, unsigned long pages);
+
+/* Adjust the domain size. When adding pages, also update remaining claims */
+unsigned long __must_check domain_update_total_pages(struct domain *d,
+    nodeid_t node, long pages);
+
+/*
+ * When pages are freed: Decrease the page count of the domain.
+ *
+ * Adding pages is handled by domain_update_total_pages() instead:
+ * It also needs the NUMA node to update the outstanding NUMA node claims.
+ *
+ * This is something that is not needed when pages are freed, because
+ * the outstanding claims are not incremented when pages are freed.
+ *
+ * With this inline, we keep the callers that free pages functionally
+ * unchanged, and don't touch them as they do not need to pass a node.
+ */
+static inline unsigned long __must_check
+domain_decrease_total_pages(struct domain *d, unsigned long pages)
+{
+    /* When freeing pages, we don't increase claims and can pass NUMA_NO_NODE */
+    return domain_update_total_pages(d, NUMA_NO_NODE, -pages);
+}
+
+static inline unsigned long __must_check
+domain_increase_total_pages(struct domain *d, nodeid_t node, unsigned long pages)
+{
+    /* When pages are added, pass the NUMA node as we need to update claims */
+    return domain_update_total_pages(d, node, pages);
+}
+
+int domain_set_outstanding_pages(struct domain *d, nodeid_t node,
+                                 unsigned long pages);
 void get_outstanding_claims(uint64_t *free_pages, uint64_t *outstanding_pages);
 
 /* Domain suballocator. These functions are *not* interrupt-safe.*/

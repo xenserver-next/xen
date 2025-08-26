@@ -773,7 +773,7 @@ static long memory_exchange(XEN_GUEST_HANDLE_PARAM(xen_memory_exchange_t) arg)
 
                 nrspin_lock(&d->page_alloc_lock);
                 drop_dom_ref = (dec_count &&
-                                !domain_adjust_tot_pages(d, -dec_count));
+                                !domain_decrease_total_pages(d, dec_count));
                 nrspin_unlock(&d->page_alloc_lock);
 
                 if ( drop_dom_ref )
@@ -1680,7 +1680,8 @@ long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         rc = xsm_claim_pages(XSM_PRIV, d);
 
         if ( !rc )
-            rc = domain_set_outstanding_pages(d, reservation.nr_extents);
+            rc = domain_set_outstanding_pages(d, NUMA_NO_NODE,
+                                              reservation.nr_extents);
 
         rcu_unlock_domain(d);
 
