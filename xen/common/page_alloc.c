@@ -487,11 +487,13 @@ static unsigned long *avail[MAX_NUMNODES];
 static long total_avail_pages;
 
 /* Per-NUMA-node counts of free pages */
-static unsigned long per_node_avail_pages[MAX_NUMNODES];
+DECLARE_PER_NODE(unsigned long, avail_pages);
+DEFINE_PER_NODE(unsigned long, avail_pages);
 
 static DEFINE_SPINLOCK(heap_lock);
 static long outstanding_claims; /* total outstanding claims by all domains */
-static unsigned long per_node_outstanding_claims[MAX_NUMNODES];
+DECLARE_PER_NODE(long, outstanding_claims);
+DEFINE_PER_NODE(long, outstanding_claims);
 
 static unsigned long avail_heap_pages(
     unsigned int zone_lo, unsigned int zone_hi, unsigned int node)
@@ -551,7 +553,7 @@ unsigned long domain_adjust_tot_pages(struct domain *d, nodeid_t node,
     adjustment = min(d->outstanding_pages + 0UL, pages + 0UL);
     d->outstanding_pages -= adjustment;
     if ( d->claim_node != NUMA_NO_NODE ) /* adjust the static per-node claims */
-        per_node_outstanding_claims[d->claim_node] -= adjustment;
+        per_node(outstanding_claims, d->claim_node) -= adjustment;
     outstanding_claims -= adjustment;
     spin_unlock(&heap_lock);
 
@@ -582,7 +584,7 @@ int domain_set_outstanding_pages(struct domain *d, nodeid_t node,
         outstanding_claims -= d->outstanding_pages;
 
         if ( d->claim_node != NUMA_NO_NODE )
-            per_node_outstanding_claims[d->claim_node] -= d->outstanding_pages;
+            per_node(outstanding_claims, d->claim_node) -= d->outstanding_pages;
 
         d->outstanding_pages = 0;
         ret = 0;
@@ -612,7 +614,8 @@ int domain_set_outstanding_pages(struct domain *d, nodeid_t node,
 
     if ( node != NUMA_NO_NODE )
     {
-        avail_pages = per_node_avail_pages[node] - per_node_outstanding_claims[node];
+        avail_pages = per_node(avail_pages, node)
+                      - per_node(outstanding_claims, node);
 
         if ( pages > avail_pages )
             goto out;
@@ -624,7 +627,7 @@ int domain_set_outstanding_pages(struct domain *d, nodeid_t node,
     d->claim_node = node;
 
     if ( node != NUMA_NO_NODE )
-        per_node_outstanding_claims[node] += pages;
+        per_node(outstanding_claims, node) += pages;
 
     ret = 0;
 
@@ -967,8 +970,8 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
                  /* For host-wide allocations, skip nodes without enough
                   * unclaimed memory. */
                   (req_node == NUMA_NO_NODE && outstanding_claims &&
-                   ((per_node_avail_pages[node] -
-                     per_node_outstanding_claims[node]) < (1UL << order))) )
+                   ((per_node(avail_pages, node) -
+                     per_node(outstanding_claims, node)) < (1UL << order))) )
                 continue;
 
             /* Find smallest order which can satisfy the request. */
@@ -1051,8 +1054,8 @@ static bool can_alloc(const struct domain *d, unsigned int memflags,
 
     if ( outstanding_claims + request <= total_avail_pages && /* host-wide, */
          (node == NUMA_NO_NODE || /* if the alloc is node-specific, then also */
-          per_node_outstanding_claims[node] + request <= /* check per-node */
-          per_node_avail_pages[node]) )
+          per_node(outstanding_claims, node) + request <= /* check per-node */
+          per_node(avail_pages, node)) )
         return true;
 
     /*
@@ -1145,8 +1148,8 @@ static struct page_info *alloc_heap_pages(
 
     ASSERT(avail[node][zone] >= request);
     avail[node][zone] -= request;
-    ASSERT(per_node_avail_pages[node] >= request);
-    per_node_avail_pages[node] -= request;
+    ASSERT(per_node(avail_pages, node) >= request);
+    per_node(avail_pages, node) -= request;
     total_avail_pages -= request;
     ASSERT(total_avail_pages >= 0);
 
@@ -1307,8 +1310,8 @@ static int reserve_offlined_page(struct page_info *head)
             continue;
 
         avail[node][zone]--;
-        ASSERT(per_node_avail_pages[node] > 0);
-        per_node_avail_pages[node]--;
+        ASSERT(per_node(avail_pages, node) > 0);
+        per_node(avail_pages, node)--;
         total_avail_pages--;
         ASSERT(total_avail_pages >= 0);
 
@@ -1633,7 +1636,7 @@ static void free_heap_pages(
     }
 
     avail[node][zone] += 1 << order;
-    per_node_avail_pages[node] += 1 << order;
+    per_node(avail_pages, node) += 1 << order;
     total_avail_pages += 1 << order;
     if ( need_scrub )
     {
