@@ -152,4 +152,19 @@ static inline nodeid_t mfn_to_nid(mfn_t mfn)
 
 #define page_to_nid(pg) mfn_to_nid(page_to_mfn(pg))
 
+/* Per NUMA node data area handling based on per-cpu data area handling. */
+extern unsigned long __pernode_offset[];
+
+#define DECLARE_PER_NODE(type, name) \
+    extern __typeof__(type) pernode__ ## name
+
+#define __DEFINE_PER_NODE(attr, type, name) \
+    attr __typeof__(type) pernode_ ## name
+
+#define DEFINE_PER_NODE(type, name) \
+    __DEFINE_PER_NODE(__section(".bss.pernode"), type, _ ## name)
+
+#define per_node(var, node)  \
+    (*RELOC_HIDE(&pernode__##var, __pernode_offset[node]))
+
 #endif /* _XEN_NUMA_H */

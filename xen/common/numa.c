@@ -320,6 +320,45 @@ static bool __init nodes_cover_memory(void)
     return true;
 }
 
+/* Defined on the BSS in xen.lds.S, used for area sizes and relative offsets */
+extern const char __pernode_start[];
+extern const char __pernode_end[];
+
+unsigned long __read_mostly __pernode_offset[MAX_NUMNODES];
+
+static char early_pernode_area[MAX_NUMNODES][SMP_CACHE_BYTES] __initdata;
+
+/* Early areas required during init_heap_pages to init per_node(avail_pages) */
+static void __init early_init_pernode_areas(void)
+{
+    unsigned int node;
+
+    for_each_online_node(node)
+        __pernode_offset[node] = early_pernode_area[node] - __pernode_start;
+}
+
+/* After early boot, migrate the per_node areas to memory on the nodes */
+static int __init init_pernode_areas(void)
+{
+    const int pernode_size = __pernode_end - __pernode_start;  /* size in BSS */
+    unsigned int node;
+
+    for_each_online_node(node)
+    {
+        char *p = alloc_xenheap_pages(get_order_from_bytes(pernode_size),
+                                      MEMF_node(node));
+
+        if ( !p )
+            return -ENOMEM;
+        /* migrate the pernode data from the bootmem area to the xenheap */
+        memcpy(p, early_pernode_area[node], SMP_CACHE_BYTES);
+        __pernode_offset[node] = p - __pernode_start;
+    }
+    return 0;
+}
+
+presmp_initcall(init_pernode_areas);
+
 /* Use discovered information to actually set up the nodes. */
 static bool __init numa_process_nodes(paddr_t start, paddr_t end)
 {
@@ -617,7 +656,7 @@ static int __init numa_emulation(unsigned long start_pfn,
 }
 #endif
 
-void __init numa_initmem_init(unsigned long start_pfn, unsigned long end_pfn)
+static void __init init_nodes(unsigned long start_pfn, unsigned long end_pfn)
 {
     unsigned int i;
     paddr_t start = pfn_to_paddr(start_pfn);
@@ -654,6 +693,12 @@ void __init numa_initmem_init(unsigned long start_pfn, unsigned long end_pfn)
 
     cpumask_copy(&node_to_cpumask[0], cpumask_of(0));
     setup_node_bootmem(0, start, end);
+}
+
+void __init numa_initmem_init(unsigned long start_pfn, unsigned long end_pfn)
+{
+    init_nodes(start_pfn, end_pfn);
+    early_init_pernode_areas(); /* With all nodes registered, init per_node() */
 }
 
 void numa_add_cpu(unsigned int cpu)

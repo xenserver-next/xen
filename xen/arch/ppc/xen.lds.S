@@ -151,6 +151,7 @@ SECTIONS
         *(.bss.stack_aligned)
         *(.bss.page_aligned)
         PERCPU_BSS
+        PERNODE_BSS
         *(.bss .bss.*)
         . = ALIGN(POINTER_ALIGN);
         __bss_end = .;

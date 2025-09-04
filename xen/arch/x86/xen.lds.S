@@ -331,6 +331,7 @@ SECTIONS
        __bss_start = .;
        *(.bss.page_aligned*)
        PERCPU_BSS
+       PERNODE_BSS
        *(.bss .bss.*)
        . = ALIGN(POINTER_ALIGN);
        __bss_end = .;

@@ -174,6 +174,14 @@
 #define LOCK_PROFILE_DATA
 #endif
 
+/* Per-node BSS for declaring per_node vars, based on per_cpu, but simpler */
+#define PERNODE_BSS                \
+       . = ALIGN(PAGE_SIZE);       \
+       __pernode_start = .;        \
+       *(.bss.pernode)             \
+       . = ALIGN(SMP_CACHE_BYTES); \
+       __pernode_end = .;          \
+
 #define PERCPU_BSS                 \
        . = ALIGN(PAGE_SIZE);       \
        __per_cpu_start = .;        \
