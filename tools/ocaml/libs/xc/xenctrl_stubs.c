@@ -1435,6 +1435,27 @@ CAMLprim value stub_xc_watchdog(value xch_val, value domid, value timeout)
 	CAMLreturn(Val_int(ret));
 }
 
+/* Claim memory for a domain. See xc_domain_claim_memory() for details. */
+CAMLprim value stub_xc_domain_claim_memory(value xch_val, value domid,
+                                           value num_claims, value desc)
+{
+	CAMLparam4(xch_val, domid, num_claims, desc);
+	xc_interface *xch = xch_of_val(xch_val);
+	int i, retval, nr_claims = Int_val(num_claims);
+	memory_claim_t claim[nr_claims];
+
+	for (i = 0; i < nr_claims; i++) {
+		claim[i].node = Int_val(Field(desc, i*2));
+		claim[i].nr_pages = Int64_val(Field(desc, i*2 + 1));
+	}
+
+	retval = xc_domain_claim_memory(xch, Int_val(domid), nr_claims, claim);
+	if (retval < 0)
+		failwith_xc(xch);
+
+	CAMLreturn(Val_unit);
+}
+
 /*
  * Local variables:
  *  indent-tabs-mode: t

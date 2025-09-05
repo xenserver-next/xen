@@ -2229,6 +2229,48 @@ out:
 
     return ret;
 }
+
+/*
+ * Claim memory for a domain. A Domain can only have one type of claim:
+ *
+ * If the number of claims is 0, existing claims are cancelled.
+ * Updating claims is not supported, cancel the existing claim first.
+ *
+ * Memory allocations consume the outstanding claim and if not enough memory is
+ * free, the allocation must be satisfied from the remaining outstanding claim.
+ */
+int xc_domain_claim_memory(xc_interface *xch, uint32_t domid,
+                           uint32_t nr_claims,
+                           const memory_claim_t *claims)
+{
+    struct xen_domctl domctl = {
+        .cmd = XEN_DOMCTL_claim_memory,
+        .domain = domid,
+        .u.claim_memory.nr_claims = nr_claims,
+    };
+    int ret;
+    DECLARE_HYPERCALL_BUFFER(struct xen_domctl_claim_memory, buffer);
+
+    /* Use an array to not need changes for multi-node claims in the future */
+    if ( nr_claims > 0 )
+    {
+        size_t bytes = sizeof(memory_claim_t) * nr_claims;
+
+        buffer = xc_hypercall_buffer_alloc(xch, buffer, bytes);
+        if ( buffer == NULL )
+        {
+            PERROR("Could not allocate memory for xc_domain_claim_memory");
+            return -1;
+        }
+        memcpy(buffer, claims, bytes);
+        set_xen_guest_handle(domctl.u.claim_memory.claims, buffer);
+    }
+
+    ret = do_domctl(xch, &domctl);
+    xc_hypercall_buffer_free(xch, buffer);
+    return ret;
+}
+
 /*
  * Local variables:
  * mode: C
