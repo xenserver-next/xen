@@ -492,6 +492,30 @@ DEFINE_PER_NODE(unsigned long, avail_pages);
 
 static DEFINE_SPINLOCK(heap_lock);
 static long outstanding_claims; /* total outstanding claims by all domains */
+DECLARE_PER_NODE(long, outstanding_claims);
+DEFINE_PER_NODE(long, outstanding_claims);
+
+#define domain_has_node_claim(d) (d->claim_node != NUMA_NO_NODE)
+
+static inline bool insufficient_memory(unsigned long request, nodeid_t node)
+{
+    return per_node(avail_pages, node) -
+           per_node(outstanding_claims, node) < request;
+}
+
+/*
+ * Adjust the claim of a domain host-wide and if set, for the claimed node
+ *
+ * All callers already hold d->page_alloc_lock and the heap_lock.
+ */
+static inline void domain_adjust_outstanding_claim(struct domain *d, long pages)
+{
+    outstanding_claims += pages;   /* Update the host-wide-outstanding claims */
+    d->outstanding_pages += pages; /* Update the domain's outstanding claims */
+
+    if ( domain_has_node_claim(d) ) /* Update the claims of that node */
+        per_node(outstanding_claims, d->claim_node) += pages;
+}
 
 static unsigned long avail_heap_pages(
     unsigned int zone_lo, unsigned int zone_hi, unsigned int node)
@@ -529,7 +553,7 @@ unsigned long domain_adjust_tot_pages(struct domain *d, long pages)
     /*
      * can test d->outstanding_pages race-free because it can only change
      * if d->page_alloc_lock and heap_lock are both held, see also
-     * domain_set_outstanding_pages below
+     * domain_claim_pages below
      *
      * If the domain has no outstanding claims (or we freed pages instead),
      * we don't update outstanding claims and skip the claims adjustment.
@@ -544,18 +568,37 @@ unsigned long domain_adjust_tot_pages(struct domain *d, long pages)
      * If allocated > outstanding, reduce the claims only by outstanding pages.
      */
     adjustment = min(d->outstanding_pages + 0UL, pages + 0UL);
-    d->outstanding_pages -= adjustment;
-    outstanding_claims -= adjustment;
+
+    domain_adjust_outstanding_claim(d, -adjustment);
     spin_unlock(&heap_lock);
 
 out:
     return d->tot_pages;
 }
 
-int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
+/*
+ * Stake claim for memory for future allocations of a domain.
+ *
+ * The claim is an abstract stake on future memory allocations,
+ * no actual memory is allocated at this point. Instead, it guarantees
+ * that future allocations up to the claim's size will succeed.
+ *
+ * If node == NUMA_NO_NODE, the claim is host-wide.
+ * Otherwise, it is local to the specific NUMA node defined by d->claim_node.
+ *
+ * It should normally only ever be before allocating the memory of the domain.
+ * When libxenguest code has finished populating the memory of the domain, it
+ * cleans up any remaining by passing of 0 to release any outstanding claims.
+ *
+ * Returns 0 on success, -EINVAL if the request is invalid,
+ * or -ENOMEM if the claim cannot be satisfied in available memory.
+ */
+int domain_claim_pages(struct domain *d, nodeid_t node, unsigned long claim)
 {
-    int ret = -ENOMEM;
-    unsigned long claim, avail_pages;
+    int ret = -EINVAL;
+
+    if ( node != NUMA_NO_NODE && !node_online(node) )
+        goto out; /* passed node is not valid */
 
     /*
      * take the domain's page_alloc_lock, else all d->tot_page adjustments
@@ -565,45 +608,35 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
     nrspin_lock(&d->page_alloc_lock);
     spin_lock(&heap_lock);
 
-    /* pages==0 means "unset" the claim. */
-    if ( pages == 0 )
+    /* claim==0 means "unset" the claim. */
+    if ( claim == 0 )
     {
-        outstanding_claims -= d->outstanding_pages;
-        d->outstanding_pages = 0;
+        domain_adjust_outstanding_claim(d, -d->outstanding_pages);
         ret = 0;
         goto out;
     }
 
     /* only one active claim per domain please */
     if ( d->outstanding_pages )
-    {
-        ret = -EINVAL;
         goto out;
-    }
 
-    /* disallow a claim not exceeding domain_tot_pages() or above max_pages */
-    if ( (pages <= domain_tot_pages(d)) || (pages > d->max_pages) )
-    {
-        ret = -EINVAL;
+    /* If we allocated for the domain already, the claim is on top of that. */
+    if ( (domain_tot_pages(d) + claim) > d->max_pages )
         goto out;
-    }
 
-    /* how much memory is available? */
-    avail_pages = total_avail_pages;
+    ret = -ENOMEM;
+    /* Check if the host-wide available memory is sufficent for this claim */
+    if ( claim > total_avail_pages - outstanding_claims )
+        goto out;
 
-    avail_pages -= outstanding_claims;
-
-    /*
-     * Note, if domain has already allocated memory before making a claim
-     * then the claim must take domain_tot_pages() into account
-     */
-    claim = pages - domain_tot_pages(d);
-    if ( claim > avail_pages )
+    /* Check if the node's available memory is insufficient for this claim */
+    if ( node != NUMA_NO_NODE && insufficient_memory(node, claim) )
         goto out;
 
     /* yay, claim fits in available memory, stake the claim, success! */
-    d->outstanding_pages = claim;
-    outstanding_claims += d->outstanding_pages;
+    d->claim_node = node;
+    domain_adjust_outstanding_claim(d, claim);
+
     ret = 0;
 
 out:

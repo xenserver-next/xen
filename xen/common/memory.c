@@ -1682,7 +1682,20 @@ long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         rc = xsm_claim_pages(XSM_PRIV, d);
 
         if ( !rc )
-            rc = domain_set_outstanding_pages(d, reservation.nr_extents);
+        {
+            unsigned long new_claim = reservation.nr_extents;
+
+            /*
+             * For backwards compatibility, keep the meaning of nr_extents:
+             * it is the target number of pages for the domain.
+             * In case memory for the domain was allocated before, we must
+             * substract the already allocated pages from the reservation.
+             */
+            if ( new_claim )
+                new_claim -= domain_tot_pages(d);
+
+            rc = domain_claim_pages(d, NUMA_NO_NODE, new_claim);
+        }
 
         rcu_unlock_domain(d);
 

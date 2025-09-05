@@ -1247,7 +1247,7 @@ int domain_kill(struct domain *d)
         rspin_barrier(&d->domain_lock);
         argo_destroy(d);
         vnuma_destroy(d->vnuma);
-        domain_set_outstanding_pages(d, 0);
+        domain_claim_pages(d, NUMA_NO_NODE, 0);
         /* fallthrough */
     case DOMDYING_dying:
         rc = domain_teardown(d);
