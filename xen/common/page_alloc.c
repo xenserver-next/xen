@@ -542,8 +542,11 @@ static unsigned long avail_heap_pages(
  * Update the total number of pages and outstanding claims of a domain.
  * - When pages were freed, we do not increase outstanding claims.
  * - On a domain's claims update, global outstanding_claims are updated as well.
+ * - If the domain's claim is on a NUMA node, we only update outstanding claims
+ *   of the domain and the node, when the allocation is from the same NUMA node.
  */
-unsigned long domain_adjust_tot_pages(struct domain *d, long pages)
+unsigned long domain_adjust_tot_pages(struct domain *d, nodeid_t node,
+                                      long pages)
 {
     unsigned long adjustment;
 
@@ -557,8 +560,12 @@ unsigned long domain_adjust_tot_pages(struct domain *d, long pages)
      *
      * If the domain has no outstanding claims (or we freed pages instead),
      * we don't update outstanding claims and skip the claims adjustment.
+     *
+     * Else, a page was allocated: But if the domain has a node_claim and
+     * the page was allocated from a different node, don't update claims.
      */
-    if ( !d->outstanding_pages || pages <= 0 )
+    if ( !d->outstanding_pages || pages <= 0 ||
+         (domain_has_node_claim(d) && d->claim_node != node) )
         goto out;
 
     spin_lock(&heap_lock);
@@ -2662,6 +2669,8 @@ int assign_pages(
 
     if ( !(memflags & MEMF_no_refcount) )
     {
+        nodeid_t node = page_to_nid(&pg[0]);
+
         if ( unlikely(d->tot_pages + nr < nr) )
         {
             gprintk(XENLOG_INFO,
@@ -2672,8 +2681,9 @@ int assign_pages(
             rc = -E2BIG;
             goto out;
         }
+        ASSERT(node == page_to_nid(&pg[nr - 1]));
 
-        if ( unlikely(domain_adjust_tot_pages(d, nr) == nr) )
+        if ( unlikely(domain_adjust_tot_pages(d, node, nr) == nr) )
             get_knownalive_domain(d);
     }
 
@@ -2806,7 +2816,8 @@ void free_domheap_pages(struct page_info *pg, unsigned int order)
                 }
             }
 
-            drop_dom_ref = !domain_adjust_tot_pages(d, -(1 << order));
+            drop_dom_ref = !domain_adjust_tot_pages(d, NUMA_NO_NODE,
+                                                    -(1 << order));
 
             rspin_unlock(&d->page_alloc_lock);
 
@@ -3012,7 +3023,7 @@ void free_domstatic_page(struct page_info *page)
 
     arch_free_heap_page(d, page);
 
-    drop_dom_ref = !domain_adjust_tot_pages(d, -1);
+    drop_dom_ref = !domain_adjust_tot_pages(d, NUMA_NO_NODE, -1);
 
     unprepare_staticmem_pages(page, 1, scrub_debug);
 
