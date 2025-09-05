@@ -980,9 +980,19 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
     {
         zone = zone_hi;
         do {
-            /* Check if target node can support the allocation. */
-            if ( !avail[node] || (avail[node][zone] < (1UL << order)) )
-                continue;
+            unsigned long request = 1UL << order;
+            /*
+             * Check if this node is currently suitable for this allocation.
+             * 1. It has sufficient memory in the requested zone and the
+             * 2. request must fit in the unclaimed memory of the node minus
+             *    outstanding claims, unless the allocation is made by a domain
+             *    with sufficient node-claimed memory to cover the allocation.
+             */
+            if ( !avail[node] || (avail[node][zone] < request) ||
+                 (insufficient_memory(node, request) &&
+                  (!d || node != d->claim_node ||     /* a domain with claims */
+                   request > d->outstanding_pages)) ) /* claim covers request */
+                continue;  /* next zone/node if insufficient memory or claims */
 
             /* Find smallest order which can satisfy the request. */
             for ( j = order; j <= MAX_ORDER; j++ )
