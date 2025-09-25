@@ -60,6 +60,7 @@ enum xenguest_opts {
     XG_OPT_FORCE, /* bool */
     XG_OPT_VGPU, /* bool */
     XG_OPT_MODULE, /* str */
+    XG_OPT_MEM_PNODE, /* int */
 };
 
 static int opt_mode = -1;
@@ -253,6 +254,7 @@ static void parse_options(int argc, char *const argv[])
         { "force", no_argument, NULL, XG_OPT_FORCE, },
         { "vgpu", no_argument, NULL, XG_OPT_VGPU, },
         { "module", required_argument, NULL, XG_OPT_MODULE, },
+        { "mem_pnode", required_argument, NULL, XG_OPT_MEM_PNODE, },
         {},
     };
 
@@ -380,6 +382,10 @@ static void parse_options(int argc, char *const argv[])
         case XG_OPT_FORK:
         case XG_OPT_NO_INC_GENID:
             /* ignored */
+            break;
+
+        case XG_OPT_MEM_PNODE:
+            parse_int(optarg); /* consume the argument, it is not required for v2 */
             break;
 
         default:
