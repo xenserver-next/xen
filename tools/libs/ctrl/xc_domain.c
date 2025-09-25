@@ -20,6 +20,7 @@
  */
 
 #include "xc_private.h"
+#include "xenguest.h"
 #include <xen/memory.h>
 #include <xen/hvm/hvm_op.h>
 
@@ -1074,6 +1075,15 @@ int xc_domain_claim_pages(xc_interface *xch,
                                uint32_t domid,
                                unsigned long nr_pages)
 {
+    return xc_domain_claim_pages_node(xch, domid, XC_NUMA_NO_NODE, nr_pages);
+}
+
+/* If node != NUMA_NO_NODE: Set the existing node bits of reservation struct */
+int xc_domain_claim_pages_node(xc_interface *xch,
+                               uint32_t domid,
+                               unsigned int node,
+                               unsigned long nr_pages)
+{
     int err;
     struct xen_memory_reservation reservation = {
         .nr_extents   = nr_pages,
@@ -1081,6 +1091,9 @@ int xc_domain_claim_pages(xc_interface *xch,
         .mem_flags    = 0, /* no flags */
         .domid        = domid
     };
+
+    if (node != XC_NUMA_NO_NODE)
+        reservation.mem_flags = node;
 
     set_xen_guest_handle(reservation.extent_start, HYPERCALL_BUFFER_NULL);
 

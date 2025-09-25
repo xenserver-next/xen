@@ -1659,9 +1659,13 @@ long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         break;
 
     case XENMEM_claim_pages:
+    {
+        nodeid_t node = NUMA_NO_NODE; /* default, if not passed in mem_flags */
+
         if ( unlikely(start_extent) )
             return -EINVAL;
 
+        /* Copy the reservation structure from the guest */
         if ( copy_from_guest(&reservation, arg, 1) )
             return -EFAULT;
 
@@ -1671,8 +1675,17 @@ long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         if ( reservation.extent_order != 0 )
             return -EINVAL;
 
+        /* Get the NUMA node and reject the call if it is invalid */
         if ( reservation.mem_flags != 0 )
-            return -EINVAL;
+        {
+            node = XENMEMF_get_node(reservation.mem_flags); /* get from flags */
+
+            /* If != NUMA_NO_NODE: Must be <MAX_NUMNODES, have exact flag set */
+            if ( node != NUMA_NO_NODE &&
+                 ((reservation.mem_flags & XENMEMF_exact_node_request) == 0 ||
+                  node >= MAX_NUMNODES) )
+                return -EINVAL;
+        }
 
         d = rcu_lock_domain_by_id(reservation.domid);
         if ( d == NULL )
@@ -1681,13 +1694,14 @@ long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         rc = xsm_claim_pages(XSM_PRIV, d);
 
         if ( !rc )
-            rc = domain_set_outstanding_pages(d, NUMA_NO_NODE,
+            rc = domain_set_outstanding_pages(d, node,
                                               reservation.nr_extents);
 
         rcu_unlock_domain(d);
 
         break;
 
+    }
     case XENMEM_get_vnumainfo:
     {
         struct xen_vnuma_topology_info topology;

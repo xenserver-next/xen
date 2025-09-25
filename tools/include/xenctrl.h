@@ -1324,6 +1324,11 @@ int xc_domain_claim_pages(xc_interface *xch,
                                uint32_t domid,
                                unsigned long nr_pages);
 
+int xc_domain_claim_pages_node(xc_interface *xch,
+                               uint32_t domid,
+                               unsigned int node,
+                               unsigned long nr_pages);
+
 int xc_domain_memory_exchange_pages(xc_interface *xch,
                                     uint32_t domid,
                                     unsigned long nr_in_extents,
