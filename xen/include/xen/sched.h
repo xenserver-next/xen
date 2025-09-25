@@ -406,6 +406,7 @@ struct domain
      * and the domain_tot_pages() helper function defined below.
      */
     unsigned int     tot_pages;
+    unsigned int     tot_pages_per_node[MAX_NUMNODES];
 
     unsigned int     xenheap_pages;     /* pages allocated from Xen heap */
     unsigned int     outstanding_pages; /* pages claimed but not possessed */
