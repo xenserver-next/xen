@@ -1211,7 +1211,7 @@ int xc_domain_get_numa_info_node_pages_size(xc_interface *xch,
 int xc_domain_get_numa_info_node_pages(xc_interface *xch,
                                        uint32_t domid,
                                        uint32_t *nr_nodes,
-                                       uint32_t *tot_pages_per_node);
+                                       uint64_t *tot_pages_per_node);
 
 int xc_domain_soft_reset(xc_interface *xch,
                          uint32_t domid);

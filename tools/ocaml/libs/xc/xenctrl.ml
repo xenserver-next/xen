@@ -294,7 +294,7 @@ external domain_get_numa_info_node_pages_size : handle -> int -> int
   = "stub_xc_domain_get_numa_info_node_pages_size"
 
 type domain_numainfo_node_pages = {
-  tot_pages_per_node : int array;
+  tot_pages_per_node : int64 array;
 }
 external domain_get_numa_info_node_pages : handle -> int -> int -> domain_numainfo_node_pages
   = "stub_xc_domain_get_numa_info_node_pages"

@@ -657,7 +657,7 @@ CAMLprim value stub_xc_domain_get_numa_info_node_pages(value xch_val, value domi
 
 	uint32_t c_domid = Int_val(domid);
 	uint32_t c_nr_nodes  = Int_val(nr_nodes);
-	uint32_t *c_tot_pages_per_node = NULL;
+	uint64_t *c_tot_pages_per_node = NULL;
 
 	if (c_nr_nodes < 1)
 		failwith_xc(xch);
@@ -676,7 +676,7 @@ CAMLprim value stub_xc_domain_get_numa_info_node_pages(value xch_val, value domi
 
 	o_result_array = caml_alloc(c_nr_nodes, 0);
 	for (i = 0; i < c_nr_nodes; i++)
-		Store_field(o_result_array, i, Val_int(c_tot_pages_per_node[i]));
+		Store_field(o_result_array, i, caml_copy_int64(c_tot_pages_per_node[i]));
 
 	free(c_tot_pages_per_node);
 

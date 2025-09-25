@@ -1072,7 +1072,7 @@ struct xen_domctl_get_numa_info {
     union {
         struct {
             uint32_t nr_nodes; /* IN/OUT: Number of nodes in/written to 'tot_pages_per_node' */
-            XEN_GUEST_HANDLE_64(uint32) tot_pages_per_node; /* IN/OUT */
+            XEN_GUEST_HANDLE_64(uint64) tot_pages_per_node; /* IN/OUT */
         } op_node_pages;
     } u;
 };
