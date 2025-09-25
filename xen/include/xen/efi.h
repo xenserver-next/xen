@@ -40,6 +40,12 @@ static inline bool efi_enabled(unsigned int feature)
 }
 #endif
 
+#if defined(CONFIG_X86) && !defined(CONFIG_PV_SHIM)
+extern bool efi_secure_boot;
+#else
+#define efi_secure_boot false
+#endif
+
 void efi_init_memory(void);
 bool efi_boot_mem_unused(unsigned long *start, unsigned long *end);
 bool efi_rs_using_pgtables(void);
