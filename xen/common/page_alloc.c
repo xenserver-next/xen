@@ -545,6 +545,9 @@ int domain_set_outstanding_pages(struct domain *d, nodeid_t node,
     int ret = -ENOMEM;
     unsigned long avail_pages;
 
+    gprintk(XENLOG_INFO, "domain_set_outstanding_pages: domid=%u node=%d pages=%lu\n",
+            d->domain_id, node, pages);
+
     if ( node != NUMA_NO_NODE && !node_online(node) )
         return -EINVAL;
 
@@ -912,6 +915,11 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
             ASSERT_UNREACHABLE();
     }
 
+    if ( order > 9 && d && d->domain_id != DOMID_XEN && d->domain_id != 0 ) {
+        gprintk(XENLOG_INFO, "get_free_buddy: params: domid=%u node=%d req_node=%d d->last_alloc_node=%d memflags=%u\n",
+            d->domain_id, node, req_node, d->last_alloc_node, memflags);
+    }
+
     if ( d && d->claim_node != NUMA_NO_NODE )
     {
         /* A specific node is claimed: override affinity based selection. */
@@ -920,6 +928,11 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
         /* Constrain nodemask to just this node to prevent searching others. */
         nodes_clear(nodemask);
         node_set(node, nodemask);
+
+        if ( order > 9 && d && d->domain_id != DOMID_XEN && d->domain_id != 0 ) {
+        gprintk(XENLOG_INFO, "get_free_buddy: claim_node=%d: domid=%u node=%d req_node=%d d->last_alloc_node=%d\n",
+            d->claim_node, d->domain_id, node, req_node, d->last_alloc_node);
+        }
     }
 
     if ( node == NUMA_NO_NODE )
@@ -929,6 +942,11 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
 
         if ( node >= MAX_NUMNODES )
             node = cpu_to_node(smp_processor_id());
+
+        if ( order > 9 && d && d->domain_id != DOMID_XEN && d->domain_id != 0 ) {
+        gprintk(XENLOG_INFO, "get_free_buddy: numa_no_node: claim_node=%d domid=%u node=%d req_node=%d d->last_alloc_node=%d\n",
+            d ? d->claim_node : 254, d ? d->domain_id : DOMID_XEN, node, req_node, d ? d->last_alloc_node : 0);
+        }
     }
     else if ( unlikely(node >= MAX_NUMNODES) )
     {
@@ -944,6 +962,11 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
      */
     for ( ; ; )
     {
+        if ( order > 9 && d && d->domain_id != DOMID_XEN && d->domain_id != 0 ) {
+        gprintk(XENLOG_INFO, "get_free_buddy: loop: domid=%u node=%d req_node=%d d->last_alloc_node=%d first=%d\n",
+            d ? d->domain_id : DOMID_XEN, node, req_node, d ? d->last_alloc_node : 0, first);
+        }
+
         zone = zone_hi;
         do {
             /* Check if target node can support the allocation. */
@@ -954,7 +977,14 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
                    per_node_outstanding_claims[node] > 0 &&
                    ((per_node_avail_pages[node] -
                      per_node_outstanding_claims[node]) < (1UL << order))) )
+            {
+                if ( order > 9 && d && d->domain_id != DOMID_XEN && d->domain_id != 0 ) {
+                    gprintk(XENLOG_INFO,
+                            "get_free_buddy: preventing loop: zone=%u dom%u order %u on node%d: per_node_avail_pages[node]=%lu per_node_outstanding_claims[node]=%lu\n",
+                            zone, d->domain_id, order, node, per_node_avail_pages[node], per_node_outstanding_claims[node]);
+                }
                 continue;
+            }
 
             /* Find smallest order which can satisfy the request. */
             for ( j = order; j <= MAX_ORDER; j++ )
@@ -968,7 +998,14 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
                      per_node_outstanding_claims[node] > 0 &&
                      ((per_node_avail_pages[node] -
                        per_node_outstanding_claims[node]) < (1UL << 19)) )  /* 2GB in pages */
+                {
+                    if ( order > 9 && d && d->domain_id != DOMID_XEN && d->domain_id != 0 ) {
+                        gprintk(XENLOG_INFO,
+                                "get_free_buddy: preventing allocation: zone=%u dom%u order %u order %u on node%d: per_node_avail_pages[node]=%lu per_node_outstanding_claims[node]=%lu\n",
+                                zone, d->domain_id, order, j, node, per_node_avail_pages[node], per_node_outstanding_claims[node]);
+                    }
                     continue;
+                }
 
                 if ( (pg = page_list_remove_head(&heap(node, zone, j))) )
                 {
@@ -983,6 +1020,12 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
                     {
                         check_and_stop_scrub(pg);
                         return pg;
+                    }
+
+                    if ( order > 9 && d && d->domain_id != DOMID_XEN && d->domain_id != 0 ) {
+                        gprintk(XENLOG_INFO,
+                                "get_free_buddy: dom%u order %u skipping dirty block of order %u on node%d\n",
+                                d->domain_id, order, j, node);
                     }
 
                     page_list_add_tail(pg, &heap(node, zone, j));
@@ -1118,6 +1161,16 @@ static struct page_info *alloc_heap_pages(
     {
         /* No suitable memory blocks. Fail the request. */
         spin_unlock(&heap_lock);
+        gprintk(XENLOG_INFO, "alloc_heap_pages: Failed allocation for domid=%u (claim_node=%d) "
+                "order=%u memflags=%u (req_node=%d) zone_lo=%u zone_hi=%u "
+                "total_avail_pages=%lu outstanding_claims=%lu d->outstanding_pages=%u "
+                "node0_per_node_outstanding_claims=%lu node1_per_node_outstanding_claims=%lu "
+                "node_affinity_hex=%lx node0_avail_pages=%lu node1_avail_pages=%lu\n",
+                d ? d->domain_id : 0, d ? d->claim_node : NUMA_NO_NODE, order, memflags, req_node, zone_lo, zone_hi,
+                total_avail_pages, outstanding_claims, d ? d->outstanding_pages : 0,
+                per_node_outstanding_claims[0], per_node_outstanding_claims[1],
+                node_affinity_val,
+                per_node_avail_pages[0], per_node_avail_pages[1]);
         return NULL;
     }
 

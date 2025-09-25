@@ -145,6 +145,9 @@ int claim_memory(struct domain *d, const struct xen_domctl_claim_memory *uinfo)
     memory_claim_t claim;
     int rc;
 
+    gprintk(XENLOG_INFO, "XEN_DOMCTL_claim_memory: domid=%u, nr_claims=%u\n",
+            d->domain_id, uinfo->nr_claims);
+
     switch ( uinfo->nr_claims )
     {
         case 0:
@@ -156,6 +159,9 @@ int claim_memory(struct domain *d, const struct xen_domctl_claim_memory *uinfo)
             /* Only single node claims supported at the moment. */
             if ( copy_from_guest(&claim, uinfo->claims, 1) )
                 return -EFAULT;
+
+            gprintk(XENLOG_INFO, "XEN_DOMCTL_claim_memory: Received claim for domid=%u, node=%u, pages=%lu\n",
+                    d->domain_id, claim.node, claim.nr_pages);
 
             rc = domain_set_outstanding_pages(d, claim.node,
                                               claim.nr_pages);

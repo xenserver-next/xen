@@ -1663,6 +1663,8 @@ long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         nodeid_t node = NUMA_NO_NODE;
 
         node = XENMEMF_get_node(reservation.mem_flags);
+        gprintk(XENLOG_INFO, "XENMEM_claim_pages: domid=%u, node=%d, nr_pages=%lu\n",
+            reservation.domid, node, reservation.nr_extents);
 
         if ( unlikely(start_extent) )
             return -EINVAL;
