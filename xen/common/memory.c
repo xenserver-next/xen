@@ -1398,7 +1398,7 @@ long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
 {
     struct domain *d, *curr_d = current->domain;
     long rc;
-    struct xen_memory_reservation reservation;
+    struct xen_memory_reservation reservation = {0};
     struct memop_args args;
     unsigned long start_extent = cmd >> MEMOP_EXTENT_SHIFT;
     int op = cmd & MEMOP_CMD_MASK;
@@ -1661,6 +1661,8 @@ long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
     case XENMEM_claim_pages:
     {
         nodeid_t node = NUMA_NO_NODE;
+
+        node = XENMEMF_get_node(reservation.mem_flags);
 
         if ( unlikely(start_extent) )
             return -EINVAL;

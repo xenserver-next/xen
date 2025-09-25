@@ -912,6 +912,16 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
             ASSERT_UNREACHABLE();
     }
 
+    if ( d && d->claim_node != NUMA_NO_NODE )
+    {
+        /* A specific node is claimed: override affinity based selection. */
+        node = d->claim_node;
+
+        /* Constrain nodemask to just this node to prevent searching others. */
+        nodes_clear(nodemask);
+        node_set(node, nodemask);
+    }
+
     if ( node == NUMA_NO_NODE )
     {
         if ( d != NULL )
@@ -940,7 +950,8 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
             if ( !avail[node] || (avail[node][zone] < (1UL << order)) ||
                  /* For host-wide allocations, skip nodes without enough
                   * unclaimed memory. */
-                  (req_node == NUMA_NO_NODE && outstanding_claims &&
+                  (d && d->claim_node == NUMA_NO_NODE &&
+                   per_node_outstanding_claims[node] > 0 &&
                    ((per_node_avail_pages[node] -
                      per_node_outstanding_claims[node]) < (1UL << order))) )
                 continue;
@@ -948,6 +959,17 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
             /* Find smallest order which can satisfy the request. */
             for ( j = order; j <= MAX_ORDER; j++ )
             {
+                /*
+                 * For host-wide allocations, ensure we do not steal a large
+                 * contiguous block which may be needed to satisfy an
+                 * outstanding claim on this node.
+                 */
+                if ( d && d->claim_node == NUMA_NO_NODE &&
+                     per_node_outstanding_claims[node] > 0 &&
+                     ((per_node_avail_pages[node] -
+                       per_node_outstanding_claims[node]) < (1UL << 19)) )  /* 2GB in pages */
+                    continue;
+
                 if ( (pg = page_list_remove_head(&heap(node, zone, j))) )
                 {
                     if ( pg->u.free.first_dirty == INVALID_DIRTY_IDX )
@@ -969,6 +991,8 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
         } while ( zone-- > zone_lo ); /* careful: unsigned zone may wrap */
 
         if ( (memflags & MEMF_exact_node) && req_node != NUMA_NO_NODE )
+            return NULL;
+        if ( d && d->claim_node != NUMA_NO_NODE )
             return NULL;
 
         /* Pick next node. */
@@ -1059,6 +1083,10 @@ static struct page_info *alloc_heap_pages(
     unsigned int dirty_cnt = 0;
     mfn_t mfn;
 
+    nodeid_t req_node = MEMF_get_node(memflags);
+    uint64_t node_affinity_val = 0;
+    if (d) { node_affinity_val = *(uint64_t*)nodemask_bits(&d->node_affinity); }
+
     /* Make sure there are enough bits in memflags for nodeID. */
     BUILD_BUG_ON((_MEMF_bits - _MEMF_node) < (8 * sizeof(nodeid_t)));
 
@@ -1085,6 +1113,7 @@ static struct page_info *alloc_heap_pages(
     if ( !pg && !(memflags & MEMF_no_scrub) )
         pg = get_free_buddy(zone_lo, zone_hi, order,
                             memflags | MEMF_no_scrub, d);
+
     if ( !pg )
     {
         /* No suitable memory blocks. Fail the request. */
