@@ -1063,6 +1063,20 @@ struct xen_domctl_vcpu_msr {
 typedef struct xen_domctl_vcpu_msr xen_domctl_vcpu_msr_t;
 DEFINE_XEN_GUEST_HANDLE(xen_domctl_vcpu_msr_t);
 
+/* XEN_DOMCTL_get_numa_info */
+struct xen_domctl_get_numa_info {
+    /* IN */
+#define XEN_DOMCTL_GET_NUMA_INFO_OP_NODE_PAGES        0
+    uint32_t op;
+
+    union {
+        struct {
+            uint32_t nr_nodes; /* IN/OUT: Number of nodes in/written to 'tot_pages_per_node' */
+            XEN_GUEST_HANDLE_64(uint32) tot_pages_per_node; /* IN/OUT */
+        } op_node_pages;
+    } u;
+};
+
 /*
  * XEN_DOMCTL_set_vcpu_msrs / XEN_DOMCTL_get_vcpu_msrs.
  *
@@ -1423,6 +1437,7 @@ struct xen_domctl {
 #define XEN_DOMCTL_gsi_permission                88
 #define XEN_DOMCTL_set_llc_colors                89
 #define XEN_DOMCTL_claim_memory                  91
+#define XEN_DOMCTL_get_numa_info                 93
 #define XEN_DOMCTL_gdbsx_guestmemio            1000
 #define XEN_DOMCTL_gdbsx_pausevcpu             1001
 #define XEN_DOMCTL_gdbsx_unpausevcpu           1002
@@ -1493,6 +1508,7 @@ struct xen_domctl {
         struct xen_domctl_dt_overlay        dt_overlay;
 #endif
         struct xen_domctl_set_llc_colors    set_llc_colors;
+        struct xen_domctl_get_numa_info     get_numa_info;
         uint8_t                             pad[128];
     } u;
 };
