@@ -899,7 +899,7 @@ long do_domctl(XEN_GUEST_HANDLE_PARAM(xen_domctl_t) u_domctl)
                           && i < MAX_NUMNODES
                           && i < op->u.get_numa_info.u.op_node_pages.nr_nodes; i++ )
                     {
-                        uint32_t tot_pages_for_node;
+                        uint64_t tot_pages_for_node;
 
                         tot_pages_for_node = d->tot_pages_per_node[i];
 
