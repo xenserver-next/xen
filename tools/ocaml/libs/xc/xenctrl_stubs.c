@@ -992,7 +992,7 @@ CAMLprim value stub_xc_physinfo(value xch_val)
 		/* ! XEN_SYSCTL_PHYSCAP_ XEN_SYSCTL_PHYSCAP_MAX max */
 		(c_physinfo.capabilities);
 
-	physinfo = caml_alloc_tuple(11);
+	physinfo = caml_alloc_tuple(12);
 	Store_field(physinfo, 0, Val_int(c_physinfo.threads_per_core));
 	Store_field(physinfo, 1, Val_int(c_physinfo.cores_per_socket));
 	Store_field(physinfo, 2, Val_int(c_physinfo.nr_cpus));
@@ -1004,6 +1004,7 @@ CAMLprim value stub_xc_physinfo(value xch_val)
 	Store_field(physinfo, 8, cap_list);
 	Store_field(physinfo, 9, Val_int(c_physinfo.max_cpu_id + 1));
 	Store_field(physinfo, 10, physinfo_arch_caps(&c_physinfo));
+	Store_field(physinfo, 11, Val_int(c_physinfo.nr_nodes));
 
 	CAMLreturn(physinfo);
 }

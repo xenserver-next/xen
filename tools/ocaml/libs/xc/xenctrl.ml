@@ -155,6 +155,7 @@ type physinfo =
     capabilities     : physinfo_cap_flag list;
     max_nr_cpus      : int;
     arch_capabilities : arch_physinfo_cap_flags;
+    nr_nodes         : int;
   }
 
 type version =
