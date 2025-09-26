@@ -106,6 +106,7 @@ allow dom0_t dom0_t:domain2 {
 	psr_alloc
 	get_cpu_policy
 	dt_overlay
+	get_numa_info
 };
 allow dom0_t dom0_t:resource {
 	add
