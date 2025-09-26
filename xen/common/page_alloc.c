@@ -504,6 +504,8 @@ unsigned long domain_adjust_tot_pages(struct domain *d, nodeid_t node,
 
     ASSERT(rspin_is_locked(&d->page_alloc_lock));
     d->tot_pages += pages;
+    if ( node >= 0 && node < MAX_NUMNODES )
+        d->tot_pages_per_node[node] += pages;
 
     /*
      * can test d->outstanding_pages race-free because it can only change

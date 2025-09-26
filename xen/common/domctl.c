@@ -881,6 +881,44 @@ long do_domctl(XEN_GUEST_HANDLE_PARAM(xen_domctl_t) u_domctl)
             ret = -EOPNOTSUPP;
         break;
 
+    case XEN_DOMCTL_get_numa_info:
+    {
+        ret = -EINVAL;
+        switch ( op->u.get_numa_info.op )
+        {
+            case XEN_DOMCTL_GET_NUMA_INFO_OP_NODE_PAGES:
+            {
+                uint32_t i;
+                ret = 0;
+
+                if ( guest_handle_is_null(
+                         op->u.get_numa_info.u.op_node_pages.tot_pages_per_node) )
+                    op->u.get_numa_info.u.op_node_pages.nr_nodes = MAX_NUMNODES;
+                else
+                    for ( i = 0; !ret
+                          && i < MAX_NUMNODES
+                          && i < op->u.get_numa_info.u.op_node_pages.nr_nodes; i++ )
+                    {
+                        uint32_t tot_pages_for_node;
+
+                        tot_pages_for_node = d->tot_pages_per_node[i];
+
+                        if ( copy_to_guest_offset(
+                                op->u.get_numa_info.u.op_node_pages.tot_pages_per_node,
+                                i, &tot_pages_for_node, 1) )
+                        {
+                            ret = -EFAULT;
+                            break;
+                        }
+                    }
+                copyback = 1;
+                break;
+            }
+
+        }
+        break;
+    }
+
     default:
         ret = arch_do_domctl(op, d, u_domctl);
         break;

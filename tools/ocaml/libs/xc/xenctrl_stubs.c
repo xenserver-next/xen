@@ -628,6 +628,64 @@ static int get_cpumap_len(xc_interface *xch, value cpumap)
 		return xc_len;
 }
 
+CAMLprim value stub_xc_domain_get_numa_info_node_pages_size(value xch_val, value domid)
+{
+	CAMLparam2(xch_val, domid);
+	CAMLlocal1(o_result);
+	xc_interface *xch = xch_of_val(xch_val);
+	uint32_t c_nr_nodes;
+	int retval;
+
+	uint32_t c_domid = Int_val(domid);
+
+	caml_enter_blocking_section();
+	retval = xc_domain_get_numa_info_node_pages_size(xch, c_domid, &c_nr_nodes);
+	caml_leave_blocking_section();
+	if (retval < 0)
+		failwith_xc(xch);
+
+	o_result = Val_int(c_nr_nodes);
+	CAMLreturn(o_result);
+}
+
+CAMLprim value stub_xc_domain_get_numa_info_node_pages(value xch_val, value domid, value nr_nodes)
+{
+	CAMLparam3(xch_val, domid, nr_nodes);
+	CAMLlocal2(o_result, o_result_array);
+	xc_interface *xch = xch_of_val(xch_val);
+	int i, retval;
+
+	uint32_t c_domid = Int_val(domid);
+	uint32_t c_nr_nodes  = Int_val(nr_nodes);
+	uint32_t *c_tot_pages_per_node = NULL;
+
+	if (c_nr_nodes < 1)
+		failwith_xc(xch);
+
+	c_tot_pages_per_node = malloc(c_nr_nodes * sizeof(*c_tot_pages_per_node));
+	if (!c_tot_pages_per_node)
+		caml_raise_out_of_memory();
+
+	caml_enter_blocking_section();
+	retval = xc_domain_get_numa_info_node_pages(xch, c_domid, &c_nr_nodes, c_tot_pages_per_node);
+	caml_leave_blocking_section();
+	if (retval < 0) {
+		free(c_tot_pages_per_node);
+		failwith_xc(xch);
+	}
+
+	o_result_array = caml_alloc(c_nr_nodes, 0);
+	for (i = 0; i < c_nr_nodes; i++)
+		Store_field(o_result_array, i, Val_int(c_tot_pages_per_node[i]));
+
+	free(c_tot_pages_per_node);
+
+	o_result = caml_alloc_tuple(1);
+	Store_field(o_result, 0, o_result_array);
+
+	CAMLreturn(o_result);
+}
+
 CAMLprim value stub_xc_vcpu_setaffinity(value xch_val, value domid,
                                         value vcpu, value cpumap)
 {

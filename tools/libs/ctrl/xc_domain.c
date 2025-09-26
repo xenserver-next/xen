@@ -2282,6 +2282,61 @@ int xc_domain_getvnuma(xc_interface *xch,
     return rc;
 }
 
+int xc_domain_get_numa_info_node_pages_size(xc_interface *xch,
+                                            uint32_t domid,
+                                            uint32_t *nr_nodes)
+{
+    struct xen_domctl domctl = {};
+    int rc;
+
+    domctl.cmd = XEN_DOMCTL_get_numa_info;
+    domctl.domain = domid;
+    domctl.u.get_numa_info.op = XEN_DOMCTL_GET_NUMA_INFO_OP_NODE_PAGES;
+
+    rc = do_domctl(xch, &domctl);
+
+    if ( !rc )
+    {
+        *nr_nodes = domctl.u.get_numa_info.u.op_node_pages.nr_nodes;
+    }
+
+    return rc;
+}
+
+int xc_domain_get_numa_info_node_pages(xc_interface *xch,
+                                       uint32_t domid,
+                                       uint32_t *nr_nodes,
+                                       uint32_t *tot_pages_per_node)
+{
+    struct xen_domctl domctl = {};
+    DECLARE_HYPERCALL_BOUNCE(tot_pages_per_node,
+                             *nr_nodes * sizeof(*tot_pages_per_node),
+                             XC_HYPERCALL_BUFFER_BOUNCE_OUT);
+
+    int rc = -1;
+    if ( !xc_hypercall_bounce_pre(xch, tot_pages_per_node) )
+    {
+        domctl.cmd = XEN_DOMCTL_get_numa_info;
+        domctl.domain = domid;
+        domctl.u.get_numa_info.op = XEN_DOMCTL_GET_NUMA_INFO_OP_NODE_PAGES;
+        domctl.u.get_numa_info.u.op_node_pages.nr_nodes = *nr_nodes;
+        set_xen_guest_handle(
+            domctl.u.get_numa_info.u.op_node_pages.tot_pages_per_node,
+            tot_pages_per_node);
+
+        rc = do_domctl(xch, &domctl);
+    }
+
+    xc_hypercall_bounce_post(xch, tot_pages_per_node);
+
+    if ( rc == 0 )
+    {
+        *nr_nodes = domctl.u.get_numa_info.u.op_node_pages.nr_nodes;
+    }
+
+    return rc;
+}
+
 int xc_domain_soft_reset(xc_interface *xch,
                          uint32_t domid)
 {

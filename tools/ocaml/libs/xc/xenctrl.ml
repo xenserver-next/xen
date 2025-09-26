@@ -289,6 +289,15 @@ external domain_getinfo: handle -> domid -> domaininfo= "stub_xc_domain_getinfo"
 external domain_get_vcpuinfo: handle -> int -> int -> vcpuinfo
   = "stub_xc_vcpu_getinfo"
 
+external domain_get_numa_info_node_pages_size : handle -> int -> int
+  = "stub_xc_domain_get_numa_info_node_pages_size"
+
+type domain_numainfo_node_pages = {
+  tot_pages_per_node : int array;
+}
+external domain_get_numa_info_node_pages : handle -> int -> int -> domain_numainfo_node_pages
+  = "stub_xc_domain_get_numa_info_node_pages"
+
 external domain_ioport_permission: handle -> domid -> int -> int -> bool -> unit
   = "stub_xc_domain_ioport_permission"
 external domain_iomem_permission: handle -> domid -> nativeint -> nativeint -> bool -> unit
