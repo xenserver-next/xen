@@ -837,10 +837,11 @@ __initcall(register_numa_trigger);
  */
 static int domain_get_node_tot_pages(struct domain *d, struct node_pages *nodes)
 {
-    uint32_t lastnode = last_node(node_online_map);
-    nodeid_t max_node = min(nodes->nr_nodes - 1, lastnode), node;
+    uint32_t max_nodes = last_node(node_online_map) + 1;
+    nodeid_t num_nodes = min(nodes->nr_nodes, max_nodes), node;
+    int ret = 0;
 
-    for ( node = 0; node <= max_node; node++ )
+    for ( node = 0; node < num_nodes; node++ )
     {
         /*
          * d->tot_pages_per_node[node] uses int (supports Xen's 16TB limit),
@@ -851,9 +852,12 @@ static int domain_get_node_tot_pages(struct domain *d, struct node_pages *nodes)
         uint64_t pages = d->node_tot_pages[node];
 
         if ( copy_to_guest_offset(nodes->node_tot_pages, node, &pages, 1) )
+        {
+            nodes->nr_nodes = 0;
             return -EFAULT;
+        }
     }
-    nodes->nr_nodes = max_node + 1;
+    nodes->nr_nodes = node;
     return 0;
 }
 
