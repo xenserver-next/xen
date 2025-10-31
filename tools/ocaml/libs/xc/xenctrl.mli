@@ -207,6 +207,7 @@ end
 
 include module type of Runstateinfo.V1
 
+(* tot_pages_per_node are counted as 4k pages *)
 type domain_numainfo_node_pages = {
   tot_pages_per_node : int64 array;
 }
