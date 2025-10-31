@@ -821,7 +821,7 @@ static int __init cf_check register_numa_trigger(void)
 __initcall(register_numa_trigger);
 
 /**
- * @brief Copy d->tot_pages_per_node[<node>] to guest memory.
+ * @brief Copy d->node_tot_pages[<node>] to guest memory.
  * @param d The domain whose NUMA info is being retrieved.
  * @param nodes The data structure to fill with total pages per node.
  * @return 0 on success, negative error code on failure.
