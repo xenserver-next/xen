@@ -844,7 +844,7 @@ static int domain_get_node_tot_pages(struct domain *d, struct node_pages *nodes)
     {
         /*
          * d->tot_pages_per_node[node] uses int (supports Xen's 16TB limit),
-         * but nodes->tot_pages_per_node is an array of uint64_t
+         * but nodes->node_tot_pages is an array of uint64_t
          * make the hypercall API future-proof for future >16TB host support,
          * so we need to copy each element individually and convert it.
          */
