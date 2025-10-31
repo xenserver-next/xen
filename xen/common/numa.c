@@ -831,7 +831,7 @@ __initcall(register_numa_trigger);
  * in the `node_pages` structure.
  *
  * It ensures that the number of nodes copied does not exceed
- * the the passed `nr_nodes` value or the number of online nodes.
+ * the passed `nr_nodes` value or the number of online nodes.
  * On success, it updates `nr_nodes` to reflect the actual
  * number of nodes copied.
  */
