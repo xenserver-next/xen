@@ -150,6 +150,12 @@ static inline nodeid_t mfn_to_nid(mfn_t mfn)
     return 0;
 }
 
+static inline int numa_domctl(
+    struct domain *d, struct xen_domctl_numa_op *numa, bool *copyback)
+{
+    return -EOPNOTSUPP;
+}
+
 #endif
 
 #define page_to_nid(pg) mfn_to_nid(page_to_mfn(pg))
