@@ -98,6 +98,7 @@ define(`create_domain_common', `
 		get_cpu_policy
 		vuart_op
 		set_llc_colors
+		numa_op
 	};
 	allow $1 $2:security check_context;
 	allow $1 $2:shadow enable;

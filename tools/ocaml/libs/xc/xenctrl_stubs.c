@@ -628,6 +628,62 @@ static int get_cpumap_len(xc_interface *xch, value cpumap)
 		return xc_len;
 }
 
+/*
+ * Xen's MAX_NUMNODES is 64 (one 64-bit long nodemask). In theory,
+ * it could be defined to 0xff in the future (one 256-bit nodemask).
+ * 0xff nodes is the limit as 0xff is used as NUMA_NO_NODE and memflags
+ * use 8 bits to store node id. By limiting to 0xff here, we are defensive
+ * and can detect if the hypercall tried to return more nodes (> 255).
+ *
+ * Practically speaking, It is very unlikely that a Xen will ever support
+ * so many NUMA nodes: Splitting the domains between so many NUMA nodes
+ * would be quite impractical as we'd have to extend the NUMA placement
+ * APIs to multi-node claims and multi-NODE domains first, as otherwise,
+ * the domains would have to be placed each on a single node (of > 255 nodes),
+ * each node having only a fraction (less than 1/255th) of the total memory,
+ * which would be quite useless in practice, or very slow if spread across
+ * many nodes. Thus, this limit is reasonable and future-proof enough.
+ */
+#define NUMNODES_LIMIT    0xff /* 0xff is NUMA_NO_NODE in memflags */
+
+CAMLprim value stub_xc_domain_numa_get_node_pages(value xch_val, value domid)
+{
+	CAMLparam2(xch_val, domid);
+	CAMLlocal2(o_result, o_result_array);
+	xc_interface *xch = xch_of_val(xch_val);
+	int i, retval;
+
+	uint32_t c_domid = Int_val(domid);
+	/* Will be updated to the number of nodes by the hypercall */
+	uint32_t c_nr_nodes = NUMNODES_LIMIT + 1; /* +1 to detect overflow */
+	uint64_t *c_node_tot_pages = malloc(c_nr_nodes * sizeof(*c_node_tot_pages));
+
+	if (!c_node_tot_pages)
+		caml_raise_out_of_memory();
+
+	caml_enter_blocking_section();
+	retval = xc_domain_numa_get_node_pages(xch, c_domid,
+		                                   &c_nr_nodes, c_node_tot_pages);
+	caml_leave_blocking_section();
+
+	/* c_nr_nodes has been reduced by the hypercall to the #nodes of the host */
+	if (retval < 0 || c_nr_nodes > NUMNODES_LIMIT) { /* detect node overflow */
+		free(c_node_tot_pages);
+		failwith_xc(xch);
+	}
+
+	o_result_array = caml_alloc(c_nr_nodes, 0);
+	for (i = 0; i < c_nr_nodes; i++)
+		Store_field(o_result_array, i, caml_copy_int64(c_node_tot_pages[i]));
+
+	free(c_node_tot_pages);
+
+	o_result = caml_alloc_tuple(1);
+	Store_field(o_result, 0, o_result_array);
+
+	CAMLreturn(o_result);
+}
+
 CAMLprim value stub_xc_vcpu_setaffinity(value xch_val, value domid,
                                         value vcpu, value cpumap)
 {

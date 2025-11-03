@@ -504,6 +504,10 @@ unsigned long domain_update_total_pages(
 
     ASSERT(rspin_is_locked(&d->page_alloc_lock));
     d->tot_pages += pages;
+#ifdef CONFIG_NUMA
+    if ( node < MAX_NUMNODES )
+        d->node_tot_pages[node] += pages;
+#endif
 
     /*
      * can test d->outstanding_pages race-free because it can only change
