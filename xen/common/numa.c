@@ -839,7 +839,6 @@ static int domain_get_node_tot_pages(struct domain *d, struct node_pages *nodes)
 {
     uint32_t max_nodes = last_node(node_online_map) + 1;
     nodeid_t num_nodes = min(nodes->nr_nodes, max_nodes), node;
-    int ret = 0;
 
     for ( node = 0; node < num_nodes; node++ )
     {
