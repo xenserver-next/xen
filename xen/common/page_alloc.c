@@ -510,14 +510,6 @@ static unsigned long avail_heap_pages(
     return free_pages;
 }
 
-unsigned long domain_adjust_tot_pages(struct domain *d, long pages)
-{
-    ASSERT(rspin_is_locked(&d->page_alloc_lock));
-    d->tot_pages += pages;
-
-    return d->tot_pages;
-}
-
 int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
 {
     int ret = -ENOMEM;

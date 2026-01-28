@@ -683,6 +683,16 @@ static inline unsigned int domain_tot_pages(const struct domain *d)
     return d->tot_pages - d->extra_pages;
 }
 
+/* Adjust number of pages currently posessed by the domain */
+static inline unsigned long
+domain_adjust_tot_pages(struct domain *d, long pages)
+{
+    ASSERT(rspin_is_locked(&d->page_alloc_lock));
+    d->tot_pages += pages;
+
+    return d->tot_pages;
+}
+
 /* Protect updates/reads (resp.) of domain_list and domain_hash. */
 extern spinlock_t domlist_update_lock;
 extern rcu_read_lock_t domlist_read_lock;
