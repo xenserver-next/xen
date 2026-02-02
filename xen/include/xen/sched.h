@@ -612,6 +612,11 @@ struct domain
     unsigned int last_alloc_node;
     spinlock_t node_affinity_lock;
 
+#ifdef CONFIG_NUMA
+    /* Distribution of tot_pages across NUMA nodes. */
+    unsigned int node_tot_pages[MAX_NUMNODES];
+#endif
+
     /* vNUMA topology accesses are protected by rwlock. */
     rwlock_t vnuma_rwlock;
     struct vnuma_info *vnuma;
@@ -683,13 +688,35 @@ static inline unsigned int domain_tot_pages(const struct domain *d)
     return d->tot_pages - d->extra_pages;
 }
 
+/* Assert d->tot_pages to always be the sum of d->node_tot_pages */
+static inline void ASSERT_NUMA_PAGE_COUNT(const struct domain *d)
+{
+#if !defined(NDEBUG) && defined(CONFIG_NUMA) && 0 /* activate when complete */
+    unsigned int i, node_total = 0;
+
+    ASSERT(rspin_is_locked(&d->page_alloc_lock));
+
+    for_each_online_node ( i )
+        node_total += d->node_tot_pages[i];
+
+    ASSERT(node_total == d->tot_pages);
+#endif
+}
+
 /* Adjust number of pages currently posessed by the domain */
 static inline unsigned long
-domain_adjust_tot_pages(struct domain *d, long pages)
+domain_adjust_tot_pages(struct domain *d, nodeid_t node, long pages)
 {
     ASSERT(rspin_is_locked(&d->page_alloc_lock));
-    d->tot_pages += pages;
 
+    d->tot_pages += pages;
+#ifdef CONFIG_NUMA
+    ASSERT(node != NUMA_NO_NODE);
+    ASSERT(node_online(node));
+    /* Adjust the domain's page count on this node */
+    d->node_tot_pages[node] += pages;
+    ASSERT_NUMA_PAGE_COUNT(d);
+#endif
     return d->tot_pages;
 }
 

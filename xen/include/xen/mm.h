@@ -65,6 +65,7 @@
 #include <xen/compiler.h>
 #include <xen/mm-frame.h>
 #include <xen/mm-types.h>
+#include <xen/numa.h>
 #include <xen/types.h>
 #include <xen/list.h>
 #include <xen/spinlock.h>
