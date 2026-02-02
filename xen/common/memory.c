@@ -549,6 +549,57 @@ static bool propagate_node(unsigned int xmf, unsigned int *memflags)
     return true;
 }
 
+/* Apply adjustments to the domain's tot_pages stats for memory_exchange() */
+static bool apply_node_tot_pages_adjustments(struct domain *d,
+                                             long node_tot_pages_adjustments[],
+                                             bool apply_to_tot_pages)
+{
+    nodeid_t node;
+    bool drop_dom_ref;
+
+    nrspin_lock(&d->page_alloc_lock);
+    for_each_online_node ( node )
+    {
+        if ( !node_tot_pages_adjustments[node] )
+            continue;
+        d->node_tot_pages[node] += node_tot_pages_adjustments[node];
+        if ( apply_to_tot_pages )
+            d->tot_pages += node_tot_pages_adjustments[node];
+    }
+    ASSERT_NUMA_PAGE_COUNT(d);
+    drop_dom_ref = !d->tot_pages;
+    nrspin_unlock(&d->page_alloc_lock);
+
+    return drop_dom_ref;
+}
+
+/*
+ * memory_exchange replaces pages of memory extents with newly allocated pages
+ * @arg: Guest handle to xen_memory_exchange structure
+ *
+ * It replaces pages with newly allocated pages and frees the old pages and is
+ * only avaiable for PV domains. The new (output) extents can have different
+ * properties (order, address width, NUMA node) than the old (input) extents.
+ *
+ * The replacement needs to happen without temporarily changing the size of the
+ * domain's memory: Without refcounting, new pages are allocated, old pages are
+ * stolen from the domain, new pages are mapped into the domain, and old pages
+ * are freed. The domain's tot_pages is not even changed temporarily.
+ *
+ * As the sizes of the input and output extents can differ, the exchange works
+ * on chunks of extents: A chunk consists of input extents that match the size
+ * of a group of output extents.
+ *
+ * It works on one chunk after another so it can be preempted between chunks.
+ * If preempted, it returns continuation data to resume with the next chunk.
+ *
+ * For each chunk, it uses two lists of pages:
+ * - Input pages: Stolen from domain -> unmapped from the physmap -> freed
+ * - Output pages: Allocated before unmap -> assigned to the domain -> mapped
+ *
+ * Return: 0 on completion, continuation data for continued execution,
+ *         or negative error code on failure.
+ */
 static long memory_exchange(XEN_GUEST_HANDLE_PARAM(xen_memory_exchange_t) arg)
 {
     struct xen_memory_exchange exch;
@@ -562,6 +613,7 @@ static long memory_exchange(XEN_GUEST_HANDLE_PARAM(xen_memory_exchange_t) arg)
     long          rc = 0;
     struct domain *d;
     struct page_info *page;
+    long per_node_pages[MAX_NUMNODES];
 
     if ( copy_from_guest(&exch, arg, 1) )
         return -EFAULT;
@@ -654,6 +706,9 @@ static long memory_exchange(XEN_GUEST_HANDLE_PARAM(xen_memory_exchange_t) arg)
           i < (exch.in.nr_extents >> in_chunk_order);
           i++ )
     {
+        /* Init the per-node changes of input and output pages of this chunk */
+        memset(per_node_pages, 0, sizeof(per_node_pages));
+
         if ( i != (exch.nr_exchanged >> in_chunk_order) &&
              hypercall_preempt_check() )
         {
@@ -712,6 +767,8 @@ static long memory_exchange(XEN_GUEST_HANDLE_PARAM(xen_memory_exchange_t) arg)
                 }
 
                 page_list_add(page, &in_chunk_list);
+                /* Account the stolen page for updating the per-node stats */
+                per_node_pages[page_to_nid(page)]--;
 #ifdef CONFIG_X86
                 put_gfn(d, gmfn + k);
 #endif
@@ -760,32 +817,24 @@ static long memory_exchange(XEN_GUEST_HANDLE_PARAM(xen_memory_exchange_t) arg)
             if ( assign_page(page, exch.out.extent_order, d,
                              MEMF_no_refcount) )
             {
-                unsigned long dec_count;
-                bool drop_dom_ref;
-
                 /*
-                 * Pages in in_chunk_list is stolen without
-                 * decreasing the tot_pages. If the domain is dying when
-                 * assign pages, we need decrease the count. For those pages
-                 * that has been assigned, it should be covered by
-                 * domain_relinquish_resources().
+                 * Pages were assigned without refcounting: When it fails, the
+                 * domain is dying. To clean up, we:
+                 * - Apply the tot_pages adjustments we captured for this chunk
+                 * - If tot_pages is 0, call put_domain() to drop the domain
+                 * - Free the freshly allocated but not assigned output page
+                 * - Exit the loop and fail
+                 * domain_relinquish_resources() will free the assigned pages
                  */
-                dec_count = (((1UL << exch.in.extent_order) *
-                              (1UL << in_chunk_order)) -
-                             (j * (1UL << exch.out.extent_order)));
-
-                nrspin_lock(&d->page_alloc_lock);
-                drop_dom_ref = (dec_count &&
-                                !domain_adjust_tot_pages(d, page_to_nid(page),
-                                                         -dec_count));
-                nrspin_unlock(&d->page_alloc_lock);
-
-                if ( drop_dom_ref )
+                if ( apply_node_tot_pages_adjustments(d, per_node_pages, true) )
                     put_domain(d);
 
                 free_domheap_pages(page, exch.out.extent_order);
                 goto dying;
             }
+
+            /* Capture the adjustment for updating the per-node tot_pages */
+            per_node_pages[page_to_nid(page)] += 1 << exch.out.extent_order;
 
             if ( __copy_from_guest_offset(&gpfn, exch.out.extent_start,
                                           (i << out_chunk_order) + j, 1) )
@@ -808,6 +857,9 @@ static long memory_exchange(XEN_GUEST_HANDLE_PARAM(xen_memory_exchange_t) arg)
 
         if ( rc )
             goto fail;
+
+        /* Apply the accounted per_node_pages captured for this chunk */
+        apply_node_tot_pages_adjustments(d, per_node_pages, false);
     }
 
     exch.nr_exchanged = exch.in.nr_extents;
@@ -821,17 +873,34 @@ static long memory_exchange(XEN_GUEST_HANDLE_PARAM(xen_memory_exchange_t) arg)
      * chunks succeeded.
      */
  fail:
-    /*
-     * Reassign any input pages we managed to steal.  NB that if the assign
-     * fails again, we're on the hook for freeing the page, since we've already
-     * cleared PGC_allocated.
-     */
+    /* Reassign any still mapped pages we managed to steal back to the domain */
     while ( (page = page_list_remove_head(&in_chunk_list)) )
+    {
         if ( assign_pages(page, 1, d, MEMF_no_refcount) )
         {
             BUG_ON(!d->is_dying);
+            /*
+             * The domain must be dying for this assign to fail. NB: As we
+             * cleared PGC_allocated, we are on the hook to free the page here.
+             */
             free_domheap_page(page);
+            /*
+             * As stealing cleared the owner of the page, free_domheap_page()
+             * did not adjust tot_pages. To make these adjustments, we let
+             * the loop below apply the negative adjustments to d->tot_pages.
+             */
         }
+        else
+            /* Reassign success: Revert the negative adjustment from stealing */
+            per_node_pages[page_to_nid(page)] += 1;
+    }
+
+    /*
+     * Apply the collected adjustments to the domain's tot_page stats.
+     * They include output pages we assigned to the domain and if the domain is
+     * dying, also pages we stole from it which we failed to reassign back.
+     */
+    apply_node_tot_pages_adjustments(d, per_node_pages, true);
 
  dying:
     rcu_unlock_domain(d);
