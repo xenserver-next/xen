@@ -691,7 +691,7 @@ static inline unsigned int domain_tot_pages(const struct domain *d)
 /* Assert d->tot_pages to always be the sum of d->node_tot_pages */
 static inline void ASSERT_NUMA_PAGE_COUNT(const struct domain *d)
 {
-#if !defined(NDEBUG) && defined(CONFIG_NUMA) && 0 /* activate when complete */
+#if !defined(NDEBUG) && defined(CONFIG_NUMA)
     unsigned int i, node_total = 0;
 
     ASSERT(rspin_is_locked(&d->page_alloc_lock));
