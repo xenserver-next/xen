@@ -1661,9 +1661,6 @@ long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         break;
 
     case XENMEM_claim_pages:
-        if ( llc_coloring_enabled )
-            return -EOPNOTSUPP;
-
         if ( unlikely(start_extent) )
             return -EINVAL;
 
