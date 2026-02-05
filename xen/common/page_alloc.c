@@ -565,6 +565,14 @@ int domain_set_outstanding_pages(struct domain *d, nodeid_t node,
     int ret = -ENOMEM;
     unsigned long claim, avail_pages;
 
+    if ( node != NUMA_NO_NODE ) /* A node was passed, we need to validate it. */
+    {
+        if ( pages == 0 )   /* When resetting claims, */
+            return -EINVAL; /* passing a node is not supported */
+        else
+            if ( node >= MAX_NUMNODES || !node_online(node) )
+                return -ENOENT;
+    }
     /*
      * Two locks are needed here:
      *  - d->page_alloc_lock: protects accesses to d->{tot,max,extra}_pages.
