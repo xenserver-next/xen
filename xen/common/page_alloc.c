@@ -484,10 +484,25 @@ static heap_by_zone_and_order_t *_heap[MAX_NUMNODES];
 static unsigned long node_need_scrub[MAX_NUMNODES];
 
 static unsigned long *avail[MAX_NUMNODES];
+static unsigned long node_avail_pages[MAX_NUMNODES];
 static long total_avail_pages;
 
 static DEFINE_SPINLOCK(heap_lock);
 static long outstanding_claims; /* total outstanding claims by all domains */
+
+/* Adjust the available page counts for a given NUMA node and zone by delta. */
+static inline
+void adjust_avail_pages(nodeid_t node, unsigned int zone, long delta)
+{
+    ASSERT(avail[node][zone] >= -delta);
+    avail[node][zone] += delta;
+
+    ASSERT(node_avail_pages[node] >= -delta);
+    node_avail_pages[node] += delta;
+
+    total_avail_pages += delta;
+    ASSERT(total_avail_pages >= 0);
+}
 
 static unsigned long avail_heap_pages(
     unsigned int zone_lo, unsigned int zone_hi, unsigned int node)
@@ -1043,10 +1058,7 @@ static struct page_info *alloc_heap_pages(
         }
     }
 
-    ASSERT(avail[node][zone] >= request);
-    avail[node][zone] -= request;
-    total_avail_pages -= request;
-    ASSERT(total_avail_pages >= 0);
+    adjust_avail_pages(node, zone, -request);
 
     if ( d && d->outstanding_pages && !(memflags & MEMF_no_refcount) )
     {
@@ -1228,10 +1240,7 @@ static int reserve_offlined_page(struct page_info *head)
         if ( !page_state_is(cur_head, offlined) )
             continue;
 
-        avail[node][zone]--;
-        total_avail_pages--;
-        ASSERT(total_avail_pages >= 0);
-
+        adjust_avail_pages(node, zone, -1);
         page_list_add_tail(cur_head,
                            test_bit(_PGC_broken, &cur_head->count_info) ?
                            &page_broken_list : &page_offlined_list);
@@ -1552,8 +1561,7 @@ static void free_heap_pages(
         }
     }
 
-    avail[node][zone] += 1 << order;
-    total_avail_pages += 1 << order;
+    adjust_avail_pages(node, zone, 1 << order);
     if ( need_scrub )
     {
         node_need_scrub[node] += 1 << order;
