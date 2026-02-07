@@ -1661,9 +1661,6 @@ long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         break;
 
     case XENMEM_claim_pages:
-        if ( llc_coloring_enabled )
-            return -EOPNOTSUPP;
-
         if ( unlikely(start_extent) )
             return -EINVAL;
 
@@ -1684,9 +1681,6 @@ long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
             return -EINVAL;
 
         rc = xsm_claim_pages(XSM_PRIV, d);
-
-        if ( !rc && d->is_dying )
-            rc = -EINVAL;
 
         if ( !rc )
             rc = domain_set_outstanding_pages(d, reservation.nr_extents);

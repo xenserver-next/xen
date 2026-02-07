@@ -266,6 +266,29 @@ int get_domain_state(struct xen_domctl_get_domain_state *info, struct domain *d,
     return rc;
 }
 
+/* Claim memory for a domain or reset the claim */
+int claim_memory(struct domain *d, const struct xen_domctl_claim_memory *uinfo)
+{
+    memory_claim_t claim;
+
+    if ( uinfo->nr_claims == 0 )
+        return -EINVAL;
+
+    /* Multiple claims not supported by domain_set_outstanding_pages() yet */
+    if ( uinfo->nr_claims != 1 )
+        return -EOPNOTSUPP;
+
+    if ( copy_from_guest(&claim, uinfo->claims, 1) )
+        return -EFAULT;
+
+    /* Convert a host memory claim to NUMA_NO_NODE as expected */
+    if ( claim.node == XEN_DOMCTL_CLAIM_MEMORY_NO_NODE )
+        claim.node = NUMA_NO_NODE;
+
+    /* NB. domain_set_outstanding_pages() has the checks to validate its args */
+    return domain_set_outstanding_pages(d, claim.node, claim.nr_pages);
+}
+
 static void __domain_finalise_shutdown(struct domain *d)
 {
     struct vcpu *v;
@@ -919,6 +942,7 @@ struct domain *domain_create(domid_t domid,
     spin_lock_init(&d->node_affinity_lock);
     d->node_affinity = NODE_MASK_ALL;
     d->auto_node_affinity = 1;
+    domain_set_claim_node(d, NUMA_NO_NODE);
 
     spin_lock_init(&d->shutdown_lock);
     d->shutdown_code = SHUTDOWN_CODE_INVALID;

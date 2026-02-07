@@ -484,10 +484,51 @@ static heap_by_zone_and_order_t *_heap[MAX_NUMNODES];
 static unsigned long node_need_scrub[MAX_NUMNODES];
 
 static unsigned long *avail[MAX_NUMNODES];
+static unsigned long node_avail_pages[MAX_NUMNODES];
+static unsigned long node_outstanding_claims[MAX_NUMNODES];
 static long total_avail_pages;
 
 static DEFINE_SPINLOCK(heap_lock);
 static long outstanding_claims; /* total outstanding claims by all domains */
+
+/* Adjust the available page counts for a given NUMA node and zone by delta. */
+static inline
+void adjust_avail_pages(nodeid_t node, unsigned int zone, long delta)
+{
+    ASSERT(avail[node][zone] >= -delta);
+    avail[node][zone] += delta;
+
+    ASSERT(node_avail_pages[node] >= -delta);
+    node_avail_pages[node] += delta;
+
+    total_avail_pages += delta;
+    ASSERT(total_avail_pages >= 0);
+}
+
+/* Adjust the outstanding claims for use when staking and consuming a claim */
+static inline
+int adjust_outstanding_claims(struct domain *d, nodeid_t node, long adjustment)
+{
+    ASSERT(spin_is_locked(&heap_lock));
+
+    outstanding_claims += adjustment;
+    d->outstanding_pages += adjustment;
+
+    if ( node != NUMA_NO_NODE )
+        node_outstanding_claims[node] += adjustment;
+    /// FIXME: Set/ update claim node
+
+    return 0;
+}
+
+/* Get pages usable for allocation on the host or a node (avail - claims) */
+static inline unsigned long get_allocatable_pages(nodeid_t node)
+{
+    if ( node == NUMA_NO_NODE )
+        return total_avail_pages - outstanding_claims;
+    else
+        return node_avail_pages[node] - node_outstanding_claims[node];
+}
 
 static unsigned long avail_heap_pages(
     unsigned int zone_lo, unsigned int zone_hi, unsigned int node)
@@ -518,11 +559,20 @@ unsigned long domain_adjust_tot_pages(struct domain *d, long pages)
     return d->tot_pages;
 }
 
-int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
+int domain_set_outstanding_pages(struct domain *d, nodeid_t node,
+                                 unsigned long pages)
 {
     int ret = -ENOMEM;
     unsigned long claim, avail_pages;
 
+    if ( node != NUMA_NO_NODE ) /* A node was passed, we need to validate it. */
+    {
+        if ( pages == 0 )   /* When resetting claims, */
+            return -EINVAL; /* passing a node is not supported */
+        else
+            if ( node >= MAX_NUMNODES || !node_online(node) )
+                return -ENOENT;
+    }
     /*
      * Two locks are needed here:
      *  - d->page_alloc_lock: protects accesses to d->{tot,max,extra}_pages.
@@ -535,9 +585,7 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
     /* pages==0 means "unset" the claim. */
     if ( pages == 0 )
     {
-        outstanding_claims -= d->outstanding_pages;
-        d->outstanding_pages = 0;
-        ret = 0;
+        ret = adjust_outstanding_claims(d, node, -d->outstanding_pages);
         goto out;
     }
 
@@ -569,9 +617,7 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
         goto out;
 
     /* yay, claim fits in available memory, stake the claim, success! */
-    d->outstanding_pages = claim;
-    outstanding_claims += d->outstanding_pages;
-    ret = 0;
+    ret = adjust_outstanding_claims(d, node, claim);
 
 out:
     spin_unlock(&heap_lock);
@@ -905,6 +951,16 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
      */
     for ( ; ; )
     {
+        /* Ensure that the domain has enough memory on this node available */
+        unsigned long current_avail_pages = node_avail_pages(node);
+
+        /* If domain has a claim on this node, it extends the available pages */
+        if ( d && claim_node(d) == node && !(memflags & MEMF_no_refcount) )
+            current_avail_pages += d->outstanding_pages;
+        /* If not sufficient, check if we can continue to the next node */
+        if ( current_avail_pages < (1UL << order) )
+            goto check_next_node;
+
         zone = zone_hi;
         do {
             /* Check if target node can support the allocation. */
@@ -934,6 +990,8 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
             }
         } while ( zone-- > zone_lo ); /* careful: unsigned zone may wrap */
 
+ check_next_node:
+        /* If MEMF_exact_node was passed, we may not skip to a different node */
         if ( (memflags & MEMF_exact_node) && req_node != NUMA_NO_NODE )
             return NULL;
 
@@ -1043,34 +1101,12 @@ static struct page_info *alloc_heap_pages(
         }
     }
 
-    ASSERT(avail[node][zone] >= request);
-    avail[node][zone] -= request;
-    total_avail_pages -= request;
-    ASSERT(total_avail_pages >= 0);
+    adjust_avail_pages(node, zone, -request);
 
     if ( d && d->outstanding_pages && !(memflags & MEMF_no_refcount) )
-    {
-        /*
-         * Adjust claims in the same locked region where total_avail_pages is
-         * adjusted, not doing so would lead to a window where the amount of
-         * free memory (avail - claimed) would be incorrect.
-         *
-         * Note that by adjusting the claimed amount here it's possible for
-         * pages to fail to be assigned to the claiming domain while already
-         * having been subtracted from d->outstanding_pages.  Such claimed
-         * amount is then lost, as the pages that fail to be assigned to the
-         * domain are freed without replenishing the claim.  This is fine given
-         * claims are only to be used during physmap population as part of
-         * domain build, and any failure in assign_pages() there will result in
-         * the domain being destroyed before creation is finished.  Losing part
-         * of the claim makes no difference.
-         */
-        unsigned long outstanding = min(d->outstanding_pages + 0UL, request);
-
-        BUG_ON(outstanding > outstanding_claims);
-        outstanding_claims -= outstanding;
-        d->outstanding_pages -= outstanding;
-    }
+        /* Reduce outstanding claims for the domain, but not below zero. */
+        adjust_outstanding_claims(d, node,
+                                  -min(d->outstanding_pages + 0UL, request));
 
     check_low_mem_virq();
 
@@ -1228,10 +1264,7 @@ static int reserve_offlined_page(struct page_info *head)
         if ( !page_state_is(cur_head, offlined) )
             continue;
 
-        avail[node][zone]--;
-        total_avail_pages--;
-        ASSERT(total_avail_pages >= 0);
-
+        adjust_avail_pages(node, zone, -1);
         page_list_add_tail(cur_head,
                            test_bit(_PGC_broken, &cur_head->count_info) ?
                            &page_broken_list : &page_offlined_list);
@@ -1552,8 +1585,7 @@ static void free_heap_pages(
         }
     }
 
-    avail[node][zone] += 1 << order;
-    total_avail_pages += 1 << order;
+    adjust_avail_pages(node, zone, 1 << order);
     if ( need_scrub )
     {
         node_need_scrub[node] += 1 << order;

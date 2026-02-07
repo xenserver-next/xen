@@ -187,4 +187,6 @@ extern bool vmtrace_available;
 
 extern bool vpmu_is_available;
 
+int claim_memory(struct domain *d, const struct xen_domctl_claim_memory *uinfo);
+
 #endif /* __XEN_DOMAIN_H__ */

@@ -2222,6 +2222,33 @@ out:
 
     return ret;
 }
+
+/* Claim the guest memory for a domain before starting the domain build */
+int xc_domain_claim_memory(xc_interface *xch,
+                           uint32_t domid,
+                           uint32_t nr_claims,
+                           memory_claim_t *claims)
+{
+    struct xen_domctl domctl = {};
+    DECLARE_HYPERCALL_BOUNCE(claims, sizeof(*claims) * nr_claims,
+                             XC_HYPERCALL_BUFFER_BOUNCE_IN);
+    int ret;
+
+    if ( xc_hypercall_bounce_pre(xch, claims) )
+            return -1;
+
+    domctl.cmd = XEN_DOMCTL_claim_memory;
+    domctl.domain = domid;
+    domctl.u.claim_memory.nr_claims = nr_claims;
+    set_xen_guest_handle(domctl.u.claim_memory.claims, claims);
+
+    ret = do_domctl(xch, &domctl);
+
+    xc_hypercall_bounce_post(xch, claims);
+
+    return ret;
+}
+
 /*
  * Local variables:
  * mode: C

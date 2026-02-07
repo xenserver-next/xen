@@ -417,6 +417,7 @@ struct domain
     unsigned int     outstanding_pages;
     unsigned int     max_pages;         /* maximum value for domain_tot_pages() */
     unsigned int     extra_pages;       /* pages not included in domain_tot_pages() */
+    nodeid_t         claim_node;        /* NUMA_NO_NODE for host-wide claims */
 
 #ifdef CONFIG_MEM_SHARING
     atomic_t         shr_pages;         /* shared pages */
@@ -662,6 +663,13 @@ struct domain
     /* Pointer to console settings; NULL for system domains. */
     struct domain_console *console;
 } __aligned(PAGE_SIZE);
+
+/*
+ * The initial implementation sets d->claim_node to the claimed NUMA node
+ * for the domain, or NUMA_NO_NODE if the claim is not node-specific.
+ */
+#define claim_node(d)               ((d)->claim_node)
+#define domain_set_claim_node(d, n) ((d)->claim_node = (n))
 
 static inline struct page_list_head *page_to_list(
     struct domain *d, const struct page_info *pg)

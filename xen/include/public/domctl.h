@@ -1276,6 +1276,29 @@ struct xen_domctl_get_domain_state {
     uint64_t unique_id;      /* Unique domain identifier. */
 };
 
+/*
+ * XEN_DOMCTL_claim_memory
+ *
+ * Claim memory for a guest domain. The claimed memory converted into actual
+ * memory pages by allocating the claimed memory. Except for the option to pass
+ * claims for NUMA nodes, the semantics are identical to XENMEM_claim_pages.
+ */
+struct xen_memory_claim {
+    uint64_t nr_pages; /* The new value for the domain's d->outstanding_pages */
+    uint32_t node;     /* NUMA node number or XEN_DOMCTL_CLAIM_MEMORY_NO_NODE */
+#define XEN_DOMCTL_CLAIM_MEMORY_NO_NODE    0xFFFFFFFF  /* No node: host claim */
+};
+typedef struct xen_memory_claim memory_claim_t;
+DEFINE_XEN_GUEST_HANDLE(memory_claim_t);
+
+/* XEN_DOMCTL_claim_memory: Claim an amount of memory for a domain */
+struct xen_domctl_claim_memory {
+    /* IN: array of struct xen_memory_claim */
+    XEN_GUEST_HANDLE_64(memory_claim_t) claims;
+    /* IN: number of claims in the claims array handle. See the claims field. */
+    uint32_t nr_claims;
+};
+
 struct xen_domctl {
 /* Stable domctl ops: interface_version is required to be 0.  */
     uint32_t cmd;
@@ -1368,6 +1391,7 @@ struct xen_domctl {
 #define XEN_DOMCTL_gsi_permission                88
 #define XEN_DOMCTL_set_llc_colors                89
 #define XEN_DOMCTL_get_domain_state              90 /* stable interface */
+#define XEN_DOMCTL_claim_memory                  91
 #define XEN_DOMCTL_gdbsx_guestmemio            1000
 #define XEN_DOMCTL_gdbsx_pausevcpu             1001
 #define XEN_DOMCTL_gdbsx_unpausevcpu           1002
@@ -1436,6 +1460,7 @@ struct xen_domctl {
 #endif
         struct xen_domctl_set_llc_colors    set_llc_colors;
         struct xen_domctl_get_domain_state  get_domain_state;
+        struct xen_domctl_claim_memory      claim_memory;
         uint8_t                             pad[128];
     } u;
 };
