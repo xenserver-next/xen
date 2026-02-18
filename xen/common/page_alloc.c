@@ -518,6 +518,36 @@ unsigned long domain_adjust_tot_pages(struct domain *d, long pages)
     return d->tot_pages;
 }
 
+/*
+ * Adjust the outstanding claimed pages when staking and consuming a claim.
+ *
+ * Called with heap_lock held to ensure atomicity with total_avail_pages
+ * adjustments. This prevents windows where free memory calculations
+ * (avail - claimed) would be incorrect.
+ *
+ * Note: When consuming claims during allocation (delta < 0), it's possible
+ * for pages to fail assignment after the claim is subtracted. Such claimed
+ * amounts are lost, but this is acceptable since claims are only used during
+ * domain build, and assignment failures result in domain destruction before
+ * completion. Losing part of the claim on destruction makes no difference.
+ */
+static inline
+void adjust_outstanding_claims(struct domain *d, long delta)
+{
+    ASSERT(spin_is_locked(&heap_lock));
+
+    if ( delta < 0 ) /* We're consuming claims */
+    {
+        /* Limit the delta for consumption to the claim's outstanding pages */
+        delta = -min(d->outstanding_pages + 0L, -delta);
+        BUG_ON(-delta > outstanding_claims);
+    }
+
+    /* Adjust the claimed pages for the host and domain */
+    outstanding_claims += delta;
+    d->outstanding_pages += delta;
+}
+
 int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
 {
     int ret = -ENOMEM;
@@ -535,8 +565,7 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
     /* pages==0 means "unset" the claim. */
     if ( pages == 0 )
     {
-        outstanding_claims -= d->outstanding_pages;
-        d->outstanding_pages = 0;
+        adjust_outstanding_claims(d, -d->outstanding_pages);
         ret = 0;
         goto out;
     }
@@ -569,8 +598,7 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
         goto out;
 
     /* yay, claim fits in available memory, stake the claim, success! */
-    d->outstanding_pages = claim;
-    outstanding_claims += d->outstanding_pages;
+    adjust_outstanding_claims(d, claim);
     ret = 0;
 
 out:
@@ -1049,28 +1077,8 @@ static struct page_info *alloc_heap_pages(
     ASSERT(total_avail_pages >= 0);
 
     if ( d && d->outstanding_pages && !(memflags & MEMF_no_refcount) )
-    {
-        /*
-         * Adjust claims in the same locked region where total_avail_pages is
-         * adjusted, not doing so would lead to a window where the amount of
-         * free memory (avail - claimed) would be incorrect.
-         *
-         * Note that by adjusting the claimed amount here it's possible for
-         * pages to fail to be assigned to the claiming domain while already
-         * having been subtracted from d->outstanding_pages.  Such claimed
-         * amount is then lost, as the pages that fail to be assigned to the
-         * domain are freed without replenishing the claim.  This is fine given
-         * claims are only to be used during physmap population as part of
-         * domain build, and any failure in assign_pages() there will result in
-         * the domain being destroyed before creation is finished.  Losing part
-         * of the claim makes no difference.
-         */
-        unsigned long outstanding = min(d->outstanding_pages + 0UL, request);
-
-        BUG_ON(outstanding > outstanding_claims);
-        outstanding_claims -= outstanding;
-        d->outstanding_pages -= outstanding;
-    }
+        /* See the function for the details of adjusting outstanding claims */
+        adjust_outstanding_claims(d, -request);
 
     check_low_mem_virq();
 
