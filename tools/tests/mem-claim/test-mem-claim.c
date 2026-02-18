@@ -38,10 +38,95 @@ static struct xen_domctl_createdomain create = {
     },
 };
 
-static void run_tests(void)
+typedef int (*claim_fn_t)(xc_interface *xch, uint32_t domid,
+                          unsigned long pages);
+
+/* Wrapper function to test claiming memory using xc_domain_claim_pages. */
+static int wrap_claim_pages(xc_interface *xch,
+                            uint32_t domid,
+                            unsigned long pages)
+{
+    return xc_domain_claim_pages(xch, domid, pages);
+}
+
+/* Wrapper function to test claiming memory using xc_domain_claim_memory. */
+static int wrap_claim_memory(xc_interface *xch,
+                             uint32_t domid,
+                             unsigned long pages)
+{
+    memory_claim_t claim[] = {
+        XEN_NODE_CLAIM_INIT(pages, XEN_DOMCTL_CLAIM_MEMORY_NO_NODE)
+    };
+
+    return xc_domain_claim_memory(xch, domid, 1, claim);
+}
+
+/* Wrapper to test claiming memory using xc_domain_claim_memory on node 0 */
+static int wrap_claim_memory_node_api(xc_interface *xch,
+                                      uint32_t domid,
+                                      unsigned long pages)
+{
+    int rc;
+    memory_claim_t claims[UINT8_MAX + 1] = {}; /* + 1 to test overflow check */
+
+    /* claim with a node that is not present */
+    claims[0] = (memory_claim_t)XEN_NODE_CLAIM_INIT(pages, physinfo.nr_nodes);
+
+    /* Check the return value of claiming memory on an invalid node */
+    rc = xc_domain_claim_memory(xch, domid, 1, claims);
+    if ( rc != -1 || errno != ENOENT )
+    {
+        fail("Expected claim failure on invalid node to fail with ENOENT\n");
+        return rc;
+    }
+    /*
+     * Check the return value of claiming on two nodes (not yet implemented)
+     * and that the valid claim is rejected when nr_claims > 1. We expect that
+     * the API will reject the call due exceeding nr_claims before it checks
+     * the validity of the node(s), so we expect EINVAL rather than ENOENT.
+     */
+    rc = xc_domain_claim_memory(xch, domid, 2, claims);
+    if ( rc != -1 || errno != EINVAL )
+    {
+        fail("Expected claiming memory with nr_claims>1 to fail with EINVAL\n");
+        return rc;
+
+    }
+    /* Likewise check with nr_claims > MAX_UINT8 to test overflow */
+    rc = xc_domain_claim_memory(xch, domid, UINT8_MAX + 1, claims);
+    if ( rc != -1 || errno != EINVAL )
+    {
+        fail("Expected claim failure on claims > MAX_UINT8 to test overflow\n");
+        return rc;
+    }
+    /* Likewise check with a node of MAX_UINT8 + 1 to test overflow */
+    claims[0].node = UINT8_MAX + 1;
+    rc = xc_domain_claim_memory(xch, domid, 1, claims);
+    if ( rc != -1 || errno != ERANGE )
+    {
+        fail("Expected claim failure with node > MAX_UINT8 to test overflow\n");
+        return rc;
+    }
+
+    /* Test with pages exceeding INT32_MAX to check overflow */
+    claims[0] = (memory_claim_t)XEN_NODE_CLAIM_INIT((unsigned)INT32_MAX + 1, 0);
+    rc = xc_domain_claim_memory(xch, domid, 1, claims);
+    if ( rc != -1 || errno != ERANGE )
+    {
+        fail("Expected claim failure with node > MAX_UINT8 to test overflow\n");
+        return rc;
+    }
+
+    /* Pass a valid claim with node 0 and continue the test */
+    claims[0] = (memory_claim_t)XEN_NODE_CLAIM_INIT(pages, 0);
+    return xc_domain_claim_memory(xch, domid, 1, claims);
+}
+
+static void run_tests(claim_fn_t claim_call_wrapper, const char *claim_name)
 {
     int rc;
 
+    printf("  Testing %s\n", claim_name);
     /*
      * Check that the system is quiescent.  Outstanding claims is a global
      * field.
@@ -102,7 +187,7 @@ static void run_tests(void)
      * Set a claim for 4M.  This should be the only claim in the system, and
      * show up globally.
      */
-    rc = xc_domain_claim_pages(xch, domid, MB_PAGES(4));
+    rc = claim_call_wrapper(xch, domid, MB_PAGES(4));
     if ( rc )
         return fail("  Failed to claim 4M of RAM: %d - %s\n",
                     errno, strerror(errno));
@@ -169,7 +254,9 @@ int main(int argc, char **argv)
     if ( !xch )
         err(1, "xc_interface_open");
 
-    run_tests();
+    run_tests(wrap_claim_pages, "xc_domain_claim_pages");
+    run_tests(wrap_claim_memory, "xc_domain_claim_memory");
+    run_tests(wrap_claim_memory_node_api, "xc_domain_claim_memory_node0");
 
     if ( domid != DOMID_INVALID )
     {
