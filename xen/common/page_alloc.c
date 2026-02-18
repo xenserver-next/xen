@@ -483,6 +483,8 @@ static heap_by_zone_and_order_t *_heap[MAX_NUMNODES];
 
 static unsigned long node_need_scrub[MAX_NUMNODES];
 
+/* Static until we have node-local _init_heap_pages() and local domain builds */
+static unsigned long node_avail_pages[MAX_NUMNODES];
 static unsigned long *avail[MAX_NUMNODES];
 static long total_avail_pages;
 
@@ -1073,6 +1075,8 @@ static struct page_info *alloc_heap_pages(
 
     ASSERT(avail[node][zone] >= request);
     avail[node][zone] -= request;
+    ASSERT(node_avail_pages[node] >= request);
+    node_avail_pages[node] -= request;
     total_avail_pages -= request;
     ASSERT(total_avail_pages >= 0);
 
@@ -1237,6 +1241,8 @@ static int reserve_offlined_page(struct page_info *head)
             continue;
 
         avail[node][zone]--;
+        ASSERT(node_avail_pages[node] > 0);
+        node_avail_pages[node]--;
         total_avail_pages--;
         ASSERT(total_avail_pages >= 0);
 
@@ -1561,6 +1567,7 @@ static void free_heap_pages(
     }
 
     avail[node][zone] += 1 << order;
+    node_avail_pages[node] += 1 << order;
     total_avail_pages += 1 << order;
     if ( need_scrub )
     {
@@ -2818,7 +2825,7 @@ unsigned long avail_domheap_pages_region(
 
 unsigned long avail_node_heap_pages(unsigned int nodeid)
 {
-    return avail_heap_pages(MEMZONE_XEN, NR_ZONES -1, nodeid);
+    return node_avail_pages[nodeid];
 }
 
 
