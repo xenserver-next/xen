@@ -1,0 +1,46 @@
+Subject: [PATCH v4 0/8] xen: Add NUMA-aware memory claims for domains
+
+This series introduces NUMA-aware memory claims. When a claim is made
+against a specific NUMA node, Xen ensures the node has enough free pages
+to satisfy the claim before accepting it.
+
+The new hypercall API is designed to support staking claims on multiple NUMA
+nodes for a domain. This introductory series adds the infrastructure to
+track whether a claim is global or tied to a specific NUMA node. This
+provides a foundation that can be extended to support multi-node claims
+without changing the hypercall API.
+
+Patch Structure:
+
+1. Encapsulate claim adjustment logic in adjust_outstanding_claims()
+2. Add per-node free page counters to optimize the allocation fast path
+3. Add infrastructure for NUMA-node-specific claims
+4. Add the XEN_DOMCTL_claim_memory hypercall handler
+5. Add a Flask security policy for the new hypercall
+6. Add the libxenctrl API xc_domain_claim_memory()
+7. Add comprehensive API documentation
+8. Extend the memory claims test to verify the new hypercall API
+
+Changes in v4:
+
+- The logic for adjusting claimed pages on allocation has been completely
+  reworked to align with recent upstream changes. (Roger Pau Monné)
+
+- The check for node memory availability has been replaced with a corrected
+  implementation. (Marcus Granado, Roger Pau Monné, Bernhard Kaindl)
+
+- The new hypercall API patch has been refactored and split into separate
+  patches for the DOMCTL, Flask policy, and libxenctrl implementation.
+
+- Added initial tests and Sphinx documentation for the new API.
+
+- The series has been heavily rebased, and the patch ordering has changed.
+  Reviewing the series as a whole is recommended over an incremental review.
+
+Credits:
+
+- Alejandro Vallejo developed the initial version
+- Roger Pau Monné updated the implementation and upstreamed key improvements
+- Marcus Granado contributed analysis and suggestions during development
+
+Comments and feedback welcome.
