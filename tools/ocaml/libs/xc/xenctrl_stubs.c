@@ -1435,6 +1435,49 @@ CAMLprim value stub_xc_watchdog(value xch_val, value domid, value timeout)
 	CAMLreturn(Val_int(ret));
 }
 
+CAMLprim value stub_xc_domain_claim_memory(value xch_val, value domid,
+                                           value claims)
+{
+	CAMLparam3(xch_val, domid, claims);
+	xc_interface *xch = xch_of_val(xch_val);
+	mlsize_t nr_claims = Wosize_val(claims);
+	memory_claim_t *claim;
+	int retval;
+
+	if (nr_claims > XEN_DOMCTL_MAX_CLAIMS)
+		caml_invalid_argument("domain_claim_memory: too many claims");
+
+	claim = calloc(nr_claims, sizeof(*claim));
+	if (claim == NULL && nr_claims != 0)
+		caml_raise_out_of_memory();
+
+	for (mlsize_t i = 0; i < nr_claims; i++) {
+		value claim_rec = Field(claims, i);
+		int64_t pages = Int64_val(Field(claim_rec, 0));
+		int32_t node = Int32_val(Field(claim_rec, 1));
+		uint32_t c_node;
+
+		if (pages < 0 || node < -1 ) {
+			free(claim);
+			caml_invalid_argument("domain_claim_memory: invalid pages or node");
+		}
+
+		if (node == -1)
+			c_node = XEN_DOMCTL_CLAIM_MEMORY_NO_NODE;
+		else
+			c_node = node;
+
+		claim[i] = (memory_claim_t)XEN_NODE_CLAIM_INIT((uint64_t)pages, c_node);
+	}
+
+	retval = xc_domain_claim_memory(xch, Int_val(domid), nr_claims, claim);
+	free(claim);
+	if (retval < 0)
+		failwith_xc(xch);
+
+	CAMLreturn(Val_unit);
+}
+
 /*
  * Local variables:
  *  indent-tabs-mode: t
