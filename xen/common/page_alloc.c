@@ -488,9 +488,64 @@ static unsigned long total_avail_pages;
 /* Static until we have node-local _init_heap_pages() and local domain builds */
 static unsigned long node_avail_pages[MAX_NUMNODES];
 
+/* Protect global heap and claims, d->outstanding_pages and d->claim_node */
 static DEFINE_SPINLOCK(heap_lock);
 /* total outstanding claims by all domains */
 static unsigned long outstanding_claims;
+/* total outstanding claims by all domains on node */
+static unsigned long node_outstanding_claims[MAX_NUMNODES];
+
+/* Return available pages after subtracting claimed pages */
+static inline unsigned long available_after_claims(unsigned long avail_pages,
+                                                   unsigned long claims)
+{
+    BUG_ON(claims > avail_pages);
+    return avail_pages - claims; /* Due to the BUG_ON, it cannot be negative */
+}
+
+/* Answer if host-level memory and claims permit this request to proceed */
+static inline bool host_allocatable_request(const struct domain *d,
+                                            unsigned int memflags,
+                                            unsigned long request)
+{
+    unsigned long allocatable_pages;
+
+    ASSERT(spin_is_locked(&heap_lock));
+
+    allocatable_pages = available_after_claims(total_avail_pages,
+                                               outstanding_claims);
+    if ( allocatable_pages >= request )
+        return true; /* The not claimed pages are enough to proceed */
+
+    if ( !d || (memflags & MEMF_no_refcount) )
+        return false; /* Claims are not available for this allocation */
+
+    /* The domain's claims are available, return true if sufficient */
+    return request <= allocatable_pages + d->outstanding_pages;
+}
+
+/* Answer if node-level memory and claims permit this request to proceed */
+static inline bool node_allocatable_request(const struct domain *d,
+                                            unsigned int memflags,
+                                            unsigned long request,
+                                            nodeid_t node)
+{
+    unsigned long allocatable_pages;
+
+    ASSERT(spin_is_locked(&heap_lock));
+    ASSERT(node < MAX_NUMNODES);
+
+    allocatable_pages = available_after_claims(node_avail_pages[node],
+                                               node_outstanding_claims[node]);
+    if ( allocatable_pages >= request )
+        return true; /* The not claimed pages are enough to proceed */
+
+    if ( !d || (memflags & MEMF_no_refcount) || (node != d->claim_node) )
+        return false; /* Claims are not available for this allocation */
+
+    /* The domain's claims are available, return true if sufficient */
+    return request <= allocatable_pages + d->outstanding_pages;
+}
 
 static unsigned long avail_heap_pages(
     unsigned int zone_lo, unsigned int zone_hi, unsigned int node)
@@ -521,14 +576,23 @@ unsigned long domain_adjust_tot_pages(struct domain *d, long pages)
     return d->tot_pages;
 }
 
-/* Release outstanding claims on the domain, host and later also node */
+/* Release outstanding claims on the domain, host and node */
 static inline
 void release_outstanding_claims(struct domain *d, unsigned long release)
 {
     ASSERT(spin_is_locked(&heap_lock));
     BUG_ON(outstanding_claims < release);
     outstanding_claims -= release;
+
+    if ( d->claim_node != NUMA_NO_NODE )
+    {
+        BUG_ON(node_outstanding_claims[d->claim_node] < release);
+        node_outstanding_claims[d->claim_node] -= release;
+    }
     d->outstanding_pages -= release;
+
+    if ( d->outstanding_pages == 0 )
+        d->claim_node = NUMA_NO_NODE; /* Clear if no outstanding pages left */
 }
 
 /*
@@ -538,7 +602,8 @@ void release_outstanding_claims(struct domain *d, unsigned long release)
  * domain build and d is destroyed if the build fails, this has no significance.
  */
 static inline
-void consume_outstanding_claims(struct domain *d, unsigned long allocation)
+void consume_outstanding_claims(struct domain *d, unsigned long allocation,
+                                nodeid_t alloc_node)
 {
     if ( !d || !d->outstanding_pages )
         return;
@@ -546,14 +611,41 @@ void consume_outstanding_claims(struct domain *d, unsigned long allocation)
 
     /* Of course, the domain can only release up its outstanding claims */
     allocation = min(allocation, d->outstanding_pages + 0UL);
+
+    if ( d->claim_node != NUMA_NO_NODE && d->claim_node != alloc_node )
+    {
+        /*
+         * The domain has a claim on a node, but the alloc is on a different
+         * node. If it would exceed the domain's max_pages, reduce the claim
+         * up to the excess over max_pages so we don't reduce the claim more
+         * than we have to to honor the max_pages limit.
+         */
+        unsigned long booked_pages = domain_tot_pages(d) + allocation +
+                                     d->outstanding_pages;
+        if ( booked_pages <= d->max_pages )
+            return; /* booked is within max_pages, no excess, keep the claim */
+
+        /* Excess detected, release the exceeding pages from the claimed node */
+        allocation = min(allocation, booked_pages - d->max_pages);
+    }
     release_outstanding_claims(d, allocation);
 }
 
-int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
+/*
+ * Update outstanding claims for the domain. Note: The node is passed as an
+ * unsigned int to allow checking for overflow above the uint8_t nodeid_t limit.
+ */
+int domain_set_outstanding_pages(struct domain *d, unsigned long pages,
+                                 unsigned int node)
 {
     int ret = -ENOMEM;
     unsigned long claim, avail_pages;
 
+    /* When releasing a claim, the node must be NUMA_NO_NODE (it is not used) */
+    if ( pages == 0 && node != NUMA_NO_NODE )
+        return -EINVAL;
+    if ( node != NUMA_NO_NODE && (node >= MAX_NUMNODES || !node_online(node)) )
+        return -ENOENT;
     /*
      * Two locks are needed here:
      *  - d->page_alloc_lock: protects accesses to d->{tot,max,extra}_pages.
@@ -586,9 +678,12 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
     }
 
     /* how much memory is available? */
-    avail_pages = total_avail_pages;
-
-    avail_pages -= outstanding_claims;
+    if ( node == NUMA_NO_NODE )
+        avail_pages = available_after_claims(total_avail_pages,
+                                             outstanding_claims);
+    else
+        avail_pages = available_after_claims(node_avail_pages[node],
+                                             node_outstanding_claims[node]);
 
     /*
      * Note, if domain has already allocated memory before making a claim
@@ -601,6 +696,11 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
     /* yay, claim fits in available memory, stake the claim, success! */
     d->outstanding_pages = claim;
     outstanding_claims += d->outstanding_pages;
+    if ( node != NUMA_NO_NODE )
+    {
+        node_outstanding_claims[node] += claim;
+        d->claim_node = node;
+    }
     ret = 0;
 
 out:
@@ -935,6 +1035,13 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
      */
     for ( ; ; )
     {
+        /*
+         * Claimed memory is considered unavailable unless the request
+         * is made by a domain with sufficient unclaimed pages.
+         */
+        if ( !node_allocatable_request(d, memflags, (1UL << order), node) )
+            goto try_next_node;
+
         zone = zone_hi;
         do {
             /* Check if target node can support the allocation. */
@@ -964,6 +1071,8 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
             }
         } while ( zone-- > zone_lo ); /* careful: unsigned zone may wrap */
 
+ try_next_node:
+        /* If MEMF_exact_node was passed, we may not skip to a different node */
         if ( (memflags & MEMF_exact_node) && req_node != NUMA_NO_NODE )
             return NULL;
 
@@ -1024,13 +1133,8 @@ static struct page_info *alloc_heap_pages(
 
     spin_lock(&heap_lock);
 
-    /*
-     * Claimed memory is considered unavailable unless the request
-     * is made by a domain with sufficient unclaimed pages.
-     */
-    if ( (outstanding_claims + request > total_avail_pages) &&
-          ((memflags & MEMF_no_refcount) ||
-           !d || d->outstanding_pages < request) )
+    /* Proceed if host-level memory and claims permit this request to proceed */
+    if ( !host_allocatable_request(d, memflags, request) )
     {
         spin_unlock(&heap_lock);
         return NULL;
@@ -1081,7 +1185,7 @@ static struct page_info *alloc_heap_pages(
     total_avail_pages -= request;
 
     if ( !(memflags & MEMF_no_refcount) )
-        consume_outstanding_claims(d, request);
+        consume_outstanding_claims(d, request, node);
 
     check_low_mem_virq();
 
