@@ -485,6 +485,18 @@ static unsigned long node_need_scrub[MAX_NUMNODES];
 
 /* avail[node][zone] is the number of free pages on that node and zone. */
 static unsigned long *avail[MAX_NUMNODES];
+/*
+ * The avail[] array has NR_ZONES entries for per-zone free page counts,
+ * plus two extra entries above NR_ZONES:
+ *   avail[node][AVAIL_NODE_TOTAL]  - total free pages on this node
+ *   avail[node][AVAIL_NODE_CLAIMS] - outstanding claims on this node
+ * This replaces the former static node_avail_pages[] and
+ * node_outstanding_claims[] arrays.
+ */
+#define AVAIL_NODE_TOTAL   NR_ZONES
+#define AVAIL_NODE_CLAIMS  (NR_ZONES + 1)
+#define NR_AVAIL_ENTRIES   (NR_ZONES + 2)
+
 /* Global available pages, updated in real-time, protected by heap_lock */
 static unsigned long total_avail_pages;
 
@@ -507,8 +519,7 @@ static DEFINE_SPINLOCK(heap_lock);
  * allocator is already serialized on it. The accessor macro abstracts the
  * storage to ease future changes (e.g. moving to per-node lock granularity).
  */
-#define node_avail_pages(node) (node_avail_pages[node])
-static unsigned long node_avail_pages[MAX_NUMNODES];
+#define node_avail_pages(node) (avail[node][AVAIL_NODE_TOTAL])
 
 /* total outstanding claims by all domains */
 static unsigned long outstanding_claims;
@@ -522,9 +533,7 @@ static unsigned long outstanding_claims;
  * a node, which are subtracted from the node's available pages to determine if
  * a request can be satisfied without violating the node's memory availability.
  */
-#define node_outstanding_claims(node) (node_outstanding_claims[node])
-/* total outstanding claims by all domains on node */
-static unsigned long node_outstanding_claims[MAX_NUMNODES];
+#define node_outstanding_claims(node) (avail[node][AVAIL_NODE_CLAIMS])
 
 /* Return available pages after subtracting claimed pages */
 static inline unsigned long available_after_claims(unsigned long avail_pages,
@@ -762,9 +771,9 @@ static unsigned long init_node_heap(int node, unsigned long mfn,
 {
     /* First node to be discovered has its heap metadata statically alloced. */
     static heap_by_zone_and_order_t _heap_static;
-    static unsigned long avail_static[NR_ZONES];
+    static unsigned long avail_static[NR_AVAIL_ENTRIES];
     unsigned long needed = (sizeof(**_heap) +
-                            sizeof(**avail) * NR_ZONES +
+                            sizeof(**avail) * NR_AVAIL_ENTRIES +
                             PAGE_SIZE - 1) >> PAGE_SHIFT;
     int i, j;
 
@@ -782,7 +791,7 @@ static unsigned long init_node_heap(int node, unsigned long mfn,
     {
         _heap[node] = mfn_to_virt(mfn + nr - needed);
         avail[node] = mfn_to_virt(mfn + nr - 1) +
-                      PAGE_SIZE - sizeof(**avail) * NR_ZONES;
+                      PAGE_SIZE - sizeof(**avail) * NR_AVAIL_ENTRIES;
     }
     else if ( nr >= needed &&
               arch_mfns_in_directmap(mfn, needed) &&
@@ -791,7 +800,7 @@ static unsigned long init_node_heap(int node, unsigned long mfn,
     {
         _heap[node] = mfn_to_virt(mfn);
         avail[node] = mfn_to_virt(mfn + needed - 1) +
-                      PAGE_SIZE - sizeof(**avail) * NR_ZONES;
+                      PAGE_SIZE - sizeof(**avail) * NR_AVAIL_ENTRIES;
         *use_tail = false;
     }
     else if ( get_order_from_bytes(sizeof(**_heap)) ==
@@ -800,18 +809,18 @@ static unsigned long init_node_heap(int node, unsigned long mfn,
         _heap[node] = alloc_xenheap_pages(get_order_from_pages(needed), 0);
         BUG_ON(!_heap[node]);
         avail[node] = (void *)_heap[node] + (needed << PAGE_SHIFT) -
-                      sizeof(**avail) * NR_ZONES;
+                      sizeof(**avail) * NR_AVAIL_ENTRIES;
         needed = 0;
     }
     else
     {
         _heap[node] = xmalloc(heap_by_zone_and_order_t);
-        avail[node] = xmalloc_array(unsigned long, NR_ZONES);
+        avail[node] = xmalloc_array(unsigned long, NR_AVAIL_ENTRIES);
         BUG_ON(!_heap[node] || !avail[node]);
         needed = 0;
     }
 
-    memset(avail[node], 0, NR_ZONES * sizeof(long));
+    memset(avail[node], 0, NR_AVAIL_ENTRIES * sizeof(long));
 
     for ( i = 0; i < NR_ZONES; i++ )
         for ( j = 0; j <= MAX_ORDER; j++ )
