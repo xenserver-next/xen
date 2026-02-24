@@ -483,11 +483,32 @@ static heap_by_zone_and_order_t *_heap[MAX_NUMNODES];
 
 static unsigned long node_need_scrub[MAX_NUMNODES];
 
+/* avail[node][zone] is the number of free pages on that node and zone. */
 static unsigned long *avail[MAX_NUMNODES];
-static long total_avail_pages;
+/* Global available pages, updated in real-time, protected by heap_lock */
+static unsigned long total_avail_pages;
 
+/* The global heap lock, protecting access to the heap and related structures */
 static DEFINE_SPINLOCK(heap_lock);
-static long outstanding_claims; /* total outstanding claims by all domains */
+
+/*
+ * Per-node count of available pages, protected by heap_lock, updated in
+ * lockstep with total_avail_pages as pages are allocated and freed.
+ *
+ * Each entry holds the sum of avail[node][zone] across all zones, used for
+ * efficiently checking node-local availability for allocation requests.
+ * Also provided via sysctl for NUMA placement decisions of domain builders
+ * and monitoring, and logged with debug-key 'u' for NUMA debugging.
+ *
+ * Maintaining this under heap_lock does not reduce scalability, as the
+ * allocator is already serialized on it. The accessor macro abstracts the
+ * storage to ease future changes (e.g. moving to per-node lock granularity).
+ */
+#define node_avail_pages(node) (node_avail_pages[node])
+static unsigned long node_avail_pages[MAX_NUMNODES];
+
+/* total outstanding claims by all domains */
+static unsigned long outstanding_claims;
 
 static unsigned long avail_heap_pages(
     unsigned int zone_lo, unsigned int zone_hi, unsigned int node)
@@ -1072,8 +1093,10 @@ static struct page_info *alloc_heap_pages(
 
     ASSERT(avail[node][zone] >= request);
     avail[node][zone] -= request;
+    ASSERT(node_avail_pages(node) >= request);
+    node_avail_pages(node) -= request;
+    ASSERT(total_avail_pages >= request);
     total_avail_pages -= request;
-    ASSERT(total_avail_pages >= 0);
 
     if ( !(memflags & MEMF_no_refcount) )
         consume_outstanding_claims(d, request);
@@ -1235,8 +1258,10 @@ static int reserve_offlined_page(struct page_info *head)
             continue;
 
         avail[node][zone]--;
+        ASSERT(node_avail_pages(node) > 0);
+        node_avail_pages(node)--;
+        ASSERT(total_avail_pages > 0);
         total_avail_pages--;
-        ASSERT(total_avail_pages >= 0);
 
         page_list_add_tail(cur_head,
                            test_bit(_PGC_broken, &cur_head->count_info) ?
@@ -1559,6 +1584,7 @@ static void free_heap_pages(
     }
 
     avail[node][zone] += 1 << order;
+    node_avail_pages(node) += 1 << order;
     total_avail_pages += 1 << order;
     if ( need_scrub )
     {
@@ -2816,7 +2842,7 @@ unsigned long avail_domheap_pages_region(
 
 unsigned long avail_node_heap_pages(unsigned int nodeid)
 {
-    return avail_heap_pages(MEMZONE_XEN, NR_ZONES -1, nodeid);
+    return node_avail_pages(nodeid);
 }
 
 
