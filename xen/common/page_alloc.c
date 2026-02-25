@@ -483,17 +483,36 @@ static heap_by_zone_and_order_t *_heap[MAX_NUMNODES];
 
 static unsigned long node_need_scrub[MAX_NUMNODES];
 
+/*
+ * The avail[] array has NR_ZONES entries for per-zone free page counts,
+ * plus two extra entries above NR_ZONES:
+ *   avail[node][AVAIL_NODE_TOTAL]  - total free pages on this node
+ *   avail[node][AVAIL_NODE_CLAIMS] - outstanding claims on this node
+ * This replaces the former static node_avail_pages[] and
+ * node_outstanding_claims[] arrays.
+ */
+#define AVAIL_NODE_TOTAL   NR_ZONES
+#define AVAIL_NODE_CLAIMS  (NR_ZONES + 1)
+#define NR_AVAIL_ENTRIES   (NR_ZONES + 2)
+
 static unsigned long *avail[MAX_NUMNODES];
 static unsigned long total_avail_pages;
-/* Static until we have node-local _init_heap_pages() and local domain builds */
-static unsigned long node_avail_pages[MAX_NUMNODES];
+/*
+ * Per-node accessors for total available pages and outstanding claims,
+ * stored in avail[node][] above the NR_ZONES zone entries.
+ *
+ * node_avail_pages(n) is used to determine whether a node-local allocation
+ * request can be satisfied without violating the node's memory availability,
+ * and is updated in lockstep with the global view (total_avail_pages and
+ * outstanding_claims) when claims are made and released.
+ */
+#define node_avail_pages(n)         (avail[n][AVAIL_NODE_TOTAL])
+#define node_outstanding_claims(n)  (avail[n][AVAIL_NODE_CLAIMS])
 
 /* Protect global heap and claims, d->outstanding_pages and d->claim_node */
 static DEFINE_SPINLOCK(heap_lock);
 /* total outstanding claims by all domains */
 static unsigned long outstanding_claims;
-/* total outstanding claims by all domains on node */
-static unsigned long node_outstanding_claims[MAX_NUMNODES];
 
 /* Return available pages after subtracting claimed pages */
 static inline unsigned long available_after_claims(unsigned long avail_pages,
@@ -535,8 +554,8 @@ static inline bool node_allocatable_request(const struct domain *d,
     ASSERT(spin_is_locked(&heap_lock));
     ASSERT(node < MAX_NUMNODES);
 
-    allocatable_pages = available_after_claims(node_avail_pages[node],
-                                               node_outstanding_claims[node]);
+    allocatable_pages = available_after_claims(node_avail_pages(node),
+                                               node_outstanding_claims(node));
     if ( allocatable_pages >= request )
         return true; /* The not claimed pages are enough to proceed */
 
@@ -586,8 +605,8 @@ void release_outstanding_claims(struct domain *d, unsigned long release)
 
     if ( d->claim_node != NUMA_NO_NODE )
     {
-        BUG_ON(node_outstanding_claims[d->claim_node] < release);
-        node_outstanding_claims[d->claim_node] -= release;
+        BUG_ON(node_outstanding_claims(d->claim_node) < release);
+        node_outstanding_claims(d->claim_node) -= release;
     }
     d->outstanding_pages -= release;
 
@@ -682,8 +701,8 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages,
         avail_pages = available_after_claims(total_avail_pages,
                                              outstanding_claims);
     else
-        avail_pages = available_after_claims(node_avail_pages[node],
-                                             node_outstanding_claims[node]);
+        avail_pages = available_after_claims(node_avail_pages(node),
+                                             node_outstanding_claims(node));
 
     /*
      * Note, if domain has already allocated memory before making a claim
@@ -698,7 +717,7 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages,
     outstanding_claims += d->outstanding_pages;
     if ( node != NUMA_NO_NODE )
     {
-        node_outstanding_claims[node] += claim;
+        node_outstanding_claims(node) += claim;
         d->claim_node = node;
     }
     ret = 0;
@@ -731,9 +750,9 @@ static unsigned long init_node_heap(int node, unsigned long mfn,
 {
     /* First node to be discovered has its heap metadata statically alloced. */
     static heap_by_zone_and_order_t _heap_static;
-    static unsigned long avail_static[NR_ZONES];
+    static unsigned long avail_static[NR_AVAIL_ENTRIES];
     unsigned long needed = (sizeof(**_heap) +
-                            sizeof(**avail) * NR_ZONES +
+                            sizeof(**avail) * NR_AVAIL_ENTRIES +
                             PAGE_SIZE - 1) >> PAGE_SHIFT;
     int i, j;
 
@@ -751,7 +770,7 @@ static unsigned long init_node_heap(int node, unsigned long mfn,
     {
         _heap[node] = mfn_to_virt(mfn + nr - needed);
         avail[node] = mfn_to_virt(mfn + nr - 1) +
-                      PAGE_SIZE - sizeof(**avail) * NR_ZONES;
+                      PAGE_SIZE - sizeof(**avail) * NR_AVAIL_ENTRIES;
     }
     else if ( nr >= needed &&
               arch_mfns_in_directmap(mfn, needed) &&
@@ -760,7 +779,7 @@ static unsigned long init_node_heap(int node, unsigned long mfn,
     {
         _heap[node] = mfn_to_virt(mfn);
         avail[node] = mfn_to_virt(mfn + needed - 1) +
-                      PAGE_SIZE - sizeof(**avail) * NR_ZONES;
+                      PAGE_SIZE - sizeof(**avail) * NR_AVAIL_ENTRIES;
         *use_tail = false;
     }
     else if ( get_order_from_bytes(sizeof(**_heap)) ==
@@ -769,18 +788,18 @@ static unsigned long init_node_heap(int node, unsigned long mfn,
         _heap[node] = alloc_xenheap_pages(get_order_from_pages(needed), 0);
         BUG_ON(!_heap[node]);
         avail[node] = (void *)_heap[node] + (needed << PAGE_SHIFT) -
-                      sizeof(**avail) * NR_ZONES;
+                      sizeof(**avail) * NR_AVAIL_ENTRIES;
         needed = 0;
     }
     else
     {
         _heap[node] = xmalloc(heap_by_zone_and_order_t);
-        avail[node] = xmalloc_array(unsigned long, NR_ZONES);
+        avail[node] = xmalloc_array(unsigned long, NR_AVAIL_ENTRIES);
         BUG_ON(!_heap[node] || !avail[node]);
         needed = 0;
     }
 
-    memset(avail[node], 0, NR_ZONES * sizeof(long));
+    memset(avail[node], 0, NR_AVAIL_ENTRIES * sizeof(long));
 
     for ( i = 0; i < NR_ZONES; i++ )
         for ( j = 0; j <= MAX_ORDER; j++ )
@@ -1179,8 +1198,8 @@ static struct page_info *alloc_heap_pages(
 
     ASSERT(avail[node][zone] >= request);
     avail[node][zone] -= request;
-    ASSERT(node_avail_pages[node] >= request);
-    node_avail_pages[node] -= request;
+    ASSERT(node_avail_pages(node) >= request);
+    node_avail_pages(node) -= request;
     ASSERT(total_avail_pages >= request);
     total_avail_pages -= request;
 
@@ -1344,8 +1363,8 @@ static int reserve_offlined_page(struct page_info *head)
             continue;
 
         avail[node][zone]--;
-        ASSERT(node_avail_pages[node] > 0);
-        node_avail_pages[node]--;
+        ASSERT(node_avail_pages(node) > 0);
+        node_avail_pages(node)--;
         ASSERT(total_avail_pages > 0);
         total_avail_pages--;
 
@@ -1670,7 +1689,7 @@ static void free_heap_pages(
     }
 
     avail[node][zone] += 1 << order;
-    node_avail_pages[node] += 1 << order;
+    node_avail_pages(node) += 1 << order;
     total_avail_pages += 1 << order;
     if ( need_scrub )
     {
@@ -2928,7 +2947,7 @@ unsigned long avail_domheap_pages_region(
 
 unsigned long avail_node_heap_pages(unsigned int nodeid)
 {
-    return node_avail_pages[nodeid];
+    return node_avail_pages(nodeid);
 }
 
 
