@@ -478,31 +478,44 @@ mfn_t __init alloc_boot_pages(unsigned long nr_pfns, unsigned long pfn_align)
                           (flsl(mfn_x(page_to_mfn(pg))) ? : 1))
 
 typedef struct page_list_head heap_by_zone_and_order_t[NR_ZONES][MAX_ORDER+1];
-static heap_by_zone_and_order_t *_heap[MAX_NUMNODES];
-#define heap(node, zone, order) ((*_heap[node])[zone][order])
 
-static unsigned long node_need_scrub[MAX_NUMNODES];
-
-/* avail[node][zone] is the number of free pages on that node and zone. */
-static unsigned long *avail[MAX_NUMNODES];
-/*
- * The avail[] array has NR_ZONES entries for per-zone free page counts,
- * plus two extra entries above NR_ZONES:
- *   avail[node][AVAIL_NODE_TOTAL]  - total free pages on this node
- *   avail[node][AVAIL_NODE_CLAIMS] - outstanding claims on this node
- * This replaces the former static node_avail_pages[] and
- * node_outstanding_claims[] arrays.
- */
 #define AVAIL_NODE_TOTAL   NR_ZONES
 #define AVAIL_NODE_CLAIMS  (NR_ZONES + 1)
 #define NR_AVAIL_ENTRIES   (NR_ZONES + 2)
 
+/*
+ * Per-NUMA-node heap structure, consolidating all per-node allocator state.
+ * Cache-line aligned to avoid false sharing between nodes.
+ *
+ * @lock:       Per-node lock (for future per-node locking; currently unused).
+ * @heap:       Pointer to free-lists organized by zone and order.
+ * @avail:      Free page counts: NR_ZONES per-zone entries, plus:
+ *                avail[AVAIL_NODE_TOTAL]  - total free pages on this node
+ *                avail[AVAIL_NODE_CLAIMS] - outstanding claims on this node
+ * @need_scrub: Number of free pages on this node that still need scrubbing.
+ */
+struct node_heap {
+    spinlock_t                lock;
+    heap_by_zone_and_order_t *heap;
+    unsigned long             avail[NR_AVAIL_ENTRIES];
+    unsigned long             need_scrub;
+} __cacheline_aligned;
+
+static struct node_heap node_heaps[MAX_NUMNODES];
+
+#define heap(node, zone, order) ((*node_heaps[node].heap)[zone][order])
+
 /* Global available pages, updated in real-time, protected by heap_lock */
+/*
+ * total_avail_pages is accessed via arch_fetch_and_add() for RMW and
+ * ACCESS_ONCE() for reads, to prepare for per-node locking where
+ * concurrent updates from different node locks are possible.
+ */
 static unsigned long total_avail_pages;
 
 /*
- * The global heap lock, protecting access to the heap and related structures
- * It protects the heap and claims, d->outstanding_pages and d->claim_node
+ * The global heap lock, protecting access to the heap and related structures.
+ * It protects the heap and claims, d->outstanding_pages and d->claim_node.
  */
 static DEFINE_SPINLOCK(heap_lock);
 
@@ -510,18 +523,18 @@ static DEFINE_SPINLOCK(heap_lock);
  * Per-node count of available pages, protected by heap_lock, updated in
  * lockstep with total_avail_pages as pages are allocated and freed.
  *
- * Each entry holds the sum of avail[node][zone] across all zones, used for
- * efficiently checking node-local availability for allocation requests.
- * Also provided via sysctl for NUMA placement decisions of domain builders
- * and monitoring, and logged with debug-key 'u' for NUMA debugging.
+ * Each entry holds the sum of avail[zone] across all zones for the node,
+ * used for efficiently checking node-local availability for allocation
+ * requests. Also provided via sysctl for NUMA placement decisions and
+ * logged with debug-key 'u' for NUMA debugging.
  *
- * Maintaining this under heap_lock does not reduce scalability, as the
- * allocator is already serialized on it. The accessor macro abstracts the
- * storage to ease future changes (e.g. moving to per-node lock granularity).
+ * The accessor macro abstracts the storage to ease the transition to
+ * per-node lock granularity.
  */
-#define node_avail_pages(node) (avail[node][AVAIL_NODE_TOTAL])
+#define node_avail_pages(node) (node_heaps[node].avail[AVAIL_NODE_TOTAL])
 
 /* total outstanding claims by all domains */
+/* Global outstanding claims — same atomic access rules as total_avail_pages */
 static unsigned long outstanding_claims;
 
 /*
@@ -533,7 +546,7 @@ static unsigned long outstanding_claims;
  * a node, which are subtracted from the node's available pages to determine if
  * a request can be satisfied without violating the node's memory availability.
  */
-#define node_outstanding_claims(node) (avail[node][AVAIL_NODE_CLAIMS])
+#define node_outstanding_claims(node) (node_heaps[node].avail[AVAIL_NODE_CLAIMS])
 
 /* Return available pages after subtracting claimed pages */
 static inline unsigned long available_after_claims(unsigned long avail_pages,
@@ -552,8 +565,8 @@ static inline bool host_allocatable_request(const struct domain *d,
 
     ASSERT(spin_is_locked(&heap_lock));
 
-    allocatable_pages = available_after_claims(total_avail_pages,
-                                               outstanding_claims);
+    allocatable_pages = available_after_claims(ACCESS_ONCE(total_avail_pages),
+                                               ACCESS_ONCE(outstanding_claims));
     if ( allocatable_pages >= request )
         return true; /* The not claimed pages are enough to proceed */
 
@@ -598,11 +611,11 @@ static unsigned long avail_heap_pages(
 
     for_each_online_node(i)
     {
-        if ( !avail[i] )
+        if ( !node_heaps[i].heap )
             continue;
         for ( zone = zone_lo; zone <= zone_hi; zone++ )
             if ( (node == -1) || (node == i) )
-                free_pages += avail[i][zone];
+                free_pages += node_heaps[i].avail[zone];
     }
 
     return free_pages;
@@ -621,8 +634,8 @@ static inline
 void release_outstanding_claims(struct domain *d, unsigned long release)
 {
     ASSERT(spin_is_locked(&heap_lock));
-    BUG_ON(outstanding_claims < release);
-    outstanding_claims -= release;
+    BUG_ON(ACCESS_ONCE(outstanding_claims) < release);
+    arch_fetch_and_add(&outstanding_claims, -(long)release);
 
     if ( d->claim_node != NUMA_NO_NODE )
     {
@@ -719,8 +732,8 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages,
 
     /* how much memory is available? */
     if ( node == NUMA_NO_NODE )
-        avail_pages = available_after_claims(total_avail_pages,
-                                             outstanding_claims);
+        avail_pages = available_after_claims(ACCESS_ONCE(total_avail_pages),
+                                             ACCESS_ONCE(outstanding_claims));
     else
         avail_pages = available_after_claims(node_avail_pages(node),
                                              node_outstanding_claims(node));
@@ -735,7 +748,7 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages,
 
     /* yay, claim fits in available memory, stake the claim, success! */
     d->outstanding_pages = claim;
-    outstanding_claims += d->outstanding_pages;
+    arch_fetch_and_add(&outstanding_claims, d->outstanding_pages);
     if ( node != NUMA_NO_NODE )
     {
         node_outstanding_claims(node) += claim;
@@ -753,7 +766,7 @@ out:
 void get_outstanding_claims(uint64_t *free_pages, uint64_t *outstanding_pages)
 {
     spin_lock(&heap_lock);
-    *outstanding_pages = outstanding_claims;
+    *outstanding_pages = ACCESS_ONCE(outstanding_claims);
     *free_pages = avail_heap_pages(MEMZONE_XEN + 1, NR_ZONES - 1, -1);
     spin_unlock(&heap_lock);
 }
@@ -771,16 +784,15 @@ static unsigned long init_node_heap(int node, unsigned long mfn,
 {
     /* First node to be discovered has its heap metadata statically alloced. */
     static heap_by_zone_and_order_t _heap_static;
-    static unsigned long avail_static[NR_AVAIL_ENTRIES];
-    unsigned long needed = (sizeof(**_heap) +
-                            sizeof(**avail) * NR_AVAIL_ENTRIES +
+    unsigned long needed = (sizeof(heap_by_zone_and_order_t) +
                             PAGE_SIZE - 1) >> PAGE_SHIFT;
     int i, j;
 
+    spin_lock_init(&node_heaps[node].lock);
+
     if ( !first_node_initialised )
     {
-        _heap[node] = &_heap_static;
-        avail[node] = avail_static;
+        node_heaps[node].heap = &_heap_static;
         first_node_initialised = true;
         needed = 0;
     }
@@ -789,38 +801,32 @@ static unsigned long init_node_heap(int node, unsigned long mfn,
               (!xenheap_bits ||
                !((mfn + nr - 1) >> (xenheap_bits - PAGE_SHIFT))) )
     {
-        _heap[node] = mfn_to_virt(mfn + nr - needed);
-        avail[node] = mfn_to_virt(mfn + nr - 1) +
-                      PAGE_SIZE - sizeof(**avail) * NR_AVAIL_ENTRIES;
+        node_heaps[node].heap = mfn_to_virt(mfn + nr - needed);
     }
     else if ( nr >= needed &&
               arch_mfns_in_directmap(mfn, needed) &&
               (!xenheap_bits ||
                !((mfn + needed - 1) >> (xenheap_bits - PAGE_SHIFT))) )
     {
-        _heap[node] = mfn_to_virt(mfn);
-        avail[node] = mfn_to_virt(mfn + needed - 1) +
-                      PAGE_SIZE - sizeof(**avail) * NR_AVAIL_ENTRIES;
+        node_heaps[node].heap = mfn_to_virt(mfn);
         *use_tail = false;
     }
-    else if ( get_order_from_bytes(sizeof(**_heap)) ==
+    else if ( get_order_from_bytes(sizeof(heap_by_zone_and_order_t)) ==
               get_order_from_pages(needed) )
     {
-        _heap[node] = alloc_xenheap_pages(get_order_from_pages(needed), 0);
-        BUG_ON(!_heap[node]);
-        avail[node] = (void *)_heap[node] + (needed << PAGE_SHIFT) -
-                      sizeof(**avail) * NR_AVAIL_ENTRIES;
+        node_heaps[node].heap = alloc_xenheap_pages(
+            get_order_from_pages(needed), 0);
+        BUG_ON(!node_heaps[node].heap);
         needed = 0;
     }
     else
     {
-        _heap[node] = xmalloc(heap_by_zone_and_order_t);
-        avail[node] = xmalloc_array(unsigned long, NR_AVAIL_ENTRIES);
-        BUG_ON(!_heap[node] || !avail[node]);
+        node_heaps[node].heap = xmalloc(heap_by_zone_and_order_t);
+        BUG_ON(!node_heaps[node].heap);
         needed = 0;
     }
 
-    memset(avail[node], 0, NR_AVAIL_ENTRIES * sizeof(long));
+    memset(node_heaps[node].avail, 0, sizeof(node_heaps[node].avail));
 
     for ( i = 0; i < NR_ZONES; i++ )
         for ( j = 0; j <= MAX_ORDER; j++ )
@@ -869,7 +875,7 @@ static void __init setup_low_mem_virq(void)
     /* Dom0 has already been allocated by now. So check we won't be
      * complaining immediately with whatever's left of the heap. */
     threshold = min(threshold,
-                    ((paddr_t) total_avail_pages) << PAGE_SHIFT);
+                    ((paddr_t) ACCESS_ONCE(total_avail_pages)) << PAGE_SHIFT);
 
     /* Then, cap to some predefined maximum */
     threshold = min(threshold, MAX_LOW_MEM_VIRQ);
@@ -877,7 +883,7 @@ static void __init setup_low_mem_virq(void)
     /* If the user specified no knob, and we are at the current available
      * level, halve the threshold. */
     if ( halve &&
-         (threshold == (((paddr_t) total_avail_pages) << PAGE_SHIFT)) )
+         (threshold == (((paddr_t) ACCESS_ONCE(total_avail_pages)) << PAGE_SHIFT)) )
         threshold >>= 1;
 
     /* Zero? Have to fire immediately */
@@ -901,7 +907,8 @@ static void __init setup_low_mem_virq(void)
 
 static void check_low_mem_virq(void)
 {
-    unsigned long avail_pages = total_avail_pages - outstanding_claims;
+    unsigned long avail_pages = ACCESS_ONCE(total_avail_pages) -
+                                ACCESS_ONCE(outstanding_claims);
 
     if ( unlikely(avail_pages <= low_mem_virq_th) )
     {
@@ -1085,7 +1092,7 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
         zone = zone_hi;
         do {
             /* Check if target node can support the allocation. */
-            if ( !avail[node] || (avail[node][zone] < (1UL << order)) )
+            if ( !node_heaps[node].heap || (node_heaps[node].avail[zone] < (1UL << order)) )
                 continue;
 
             /* Find smallest order which can satisfy the request. */
@@ -1217,12 +1224,12 @@ static struct page_info *alloc_heap_pages(
         }
     }
 
-    ASSERT(avail[node][zone] >= request);
-    avail[node][zone] -= request;
+    ASSERT(node_heaps[node].avail[zone] >= request);
+    node_heaps[node].avail[zone] -= request;
     ASSERT(node_avail_pages(node) >= request);
     node_avail_pages(node) -= request;
-    ASSERT(total_avail_pages >= request);
-    total_avail_pages -= request;
+    ASSERT(ACCESS_ONCE(total_avail_pages) >= request);
+    arch_fetch_and_add(&total_avail_pages, -(long)request);
 
     if ( !(memflags & MEMF_no_refcount) )
         consume_outstanding_claims(d, request, node);
@@ -1281,7 +1288,7 @@ static struct page_info *alloc_heap_pages(
         if ( dirty_cnt )
         {
             spin_lock(&heap_lock);
-            node_need_scrub[node] -= dirty_cnt;
+            node_heaps[node].need_scrub -= dirty_cnt;
             spin_unlock(&heap_lock);
         }
     }
@@ -1383,11 +1390,11 @@ static int reserve_offlined_page(struct page_info *head)
         if ( !page_state_is(cur_head, offlined) )
             continue;
 
-        avail[node][zone]--;
+        node_heaps[node].avail[zone]--;
         ASSERT(node_avail_pages(node) > 0);
         node_avail_pages(node)--;
-        ASSERT(total_avail_pages > 0);
-        total_avail_pages--;
+        ASSERT(ACCESS_ONCE(total_avail_pages) > 0);
+        arch_fetch_and_add(&total_avail_pages, -1L);
 
         page_list_add_tail(cur_head,
                            test_bit(_PGC_broken, &cur_head->count_info) ?
@@ -1417,7 +1424,7 @@ static unsigned int node_to_scrub(bool get_node)
     if ( node == NUMA_NO_NODE )
         node = 0;
 
-    if ( node_need_scrub[node] &&
+    if ( node_heaps[node].need_scrub &&
          (!get_node || !node_test_and_set(node, node_scrubbing)) )
         return node;
 
@@ -1444,7 +1451,7 @@ static unsigned int node_to_scrub(bool get_node)
         if ( node == local_node )
             break;
 
-        if ( node_need_scrub[node] )
+        if ( node_heaps[node].need_scrub )
         {
             if ( !get_node )
                 return node;
@@ -1560,7 +1567,7 @@ bool scrub_free_pages(void)
                         pg->u.free.scrub_state = BUDDY_NOT_SCRUBBING;
 
                         spin_lock(&heap_lock);
-                        node_need_scrub[node] -= dirty_cnt;
+                        node_heaps[node].need_scrub -= dirty_cnt;
                         spin_unlock(&heap_lock);
                         goto out_nolock;
                     }
@@ -1592,7 +1599,7 @@ bool scrub_free_pages(void)
                 st.drop = false;
                 spin_lock_cb(&heap_lock, scrub_continue, &st);
 
-                node_need_scrub[node] -= dirty_cnt;
+                node_heaps[node].need_scrub -= dirty_cnt;
 
                 if ( st.drop )
                     goto out;
@@ -1607,7 +1614,7 @@ bool scrub_free_pages(void)
 
                 pg->u.free.scrub_state = BUDDY_NOT_SCRUBBING;
 
-                if ( preempt || (node_need_scrub[node] == 0) )
+                if ( preempt || (node_heaps[node].need_scrub == 0) )
                     goto out;
             }
         } while ( order-- != 0 );
@@ -1709,12 +1716,12 @@ static void free_heap_pages(
         }
     }
 
-    avail[node][zone] += 1 << order;
+    node_heaps[node].avail[zone] += 1 << order;
     node_avail_pages(node) += 1 << order;
-    total_avail_pages += 1 << order;
+    arch_fetch_and_add(&total_avail_pages, 1UL << order);
     if ( need_scrub )
     {
-        node_need_scrub[node] += 1 << order;
+        node_heaps[node].need_scrub += 1 << order;
         pg->u.free.first_dirty = 0;
     }
     else
@@ -2047,7 +2054,7 @@ static void _init_heap_pages(const struct page_info *pg,
 
     s = mfn_x(page_to_mfn(pg));
     e = mfn_x(mfn_add(page_to_mfn(pg + nr_pages - 1), 1));
-    if ( unlikely(!avail[nid]) )
+    if ( unlikely(!node_heaps[nid].heap) )
     {
         bool use_tail = IS_ALIGNED(s, 1UL << MAX_ORDER) &&
                         (ffsl(e) <= ffsl(s));
@@ -3018,18 +3025,18 @@ static void cf_check dump_heap(unsigned char key)
 
     for ( i = 0; i < MAX_NUMNODES; i++ )
     {
-        if ( !avail[i] )
+        if ( !node_heaps[i].heap )
             continue;
         for ( j = 0; j < NR_ZONES; j++ )
             printk("heap[node=%d][zone=%d] -> %lu pages\n",
-                   i, j, avail[i][j]);
+                   i, j, node_heaps[i].avail[j]);
     }
 
     for ( i = 0; i < MAX_NUMNODES; i++ )
     {
-        if ( !node_need_scrub[i] )
+        if ( !node_heaps[i].need_scrub )
             continue;
-        printk("Node %d has %lu unscrubbed pages\n", i, node_need_scrub[i]);
+        printk("Node %d has %lu unscrubbed pages\n", i, node_heaps[i].need_scrub);
     }
 
     if ( llc_coloring_enabled )
