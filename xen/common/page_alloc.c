@@ -501,6 +501,11 @@ struct per_node {
      */
     unsigned long            outstanding_claims;
     /*
+     * need_scrub is the number of pages on that node that need to be scrubbed
+     * before they can be allocated to domains.
+     */
+    unsigned long            need_scrub;
+    /*
      * avail is the number of free pages on that node and zone, used to check
      * if a zone could satisfy an allocation request before consulting the heap.
      */
@@ -523,8 +528,6 @@ struct per_node_cacheline_isolated {
         char __pad[L1_CACHE_ALIGN(sizeof(struct per_node))];
     } u;
 } __cacheline_aligned;
-
-static unsigned long node_need_scrub[MAX_NUMNODES];
 
 static unsigned long total_avail_pages;
 /*
@@ -1298,7 +1301,7 @@ static struct page_info *alloc_heap_pages(
         if ( dirty_cnt )
         {
             spin_lock(&heap_lock);
-            node_need_scrub[node] -= dirty_cnt;
+            per_node[node]->need_scrub -= dirty_cnt;
             spin_unlock(&heap_lock);
         }
     }
@@ -1433,7 +1436,7 @@ static unsigned int node_to_scrub(bool get_node)
     if ( node == NUMA_NO_NODE )
         node = 0;
 
-    if ( node_need_scrub[node] &&
+    if ( per_node[node]->need_scrub &&
          (!get_node || !node_test_and_set(node, node_scrubbing)) )
         return node;
 
@@ -1460,7 +1463,7 @@ static unsigned int node_to_scrub(bool get_node)
         if ( node == local_node )
             break;
 
-        if ( node_need_scrub[node] )
+        if ( per_node[node]->need_scrub )
         {
             if ( !get_node )
                 return node;
@@ -1576,7 +1579,7 @@ bool scrub_free_pages(void)
                         pg->u.free.scrub_state = BUDDY_NOT_SCRUBBING;
 
                         spin_lock(&heap_lock);
-                        node_need_scrub[node] -= dirty_cnt;
+                        per_node[node]->need_scrub -= dirty_cnt;
                         spin_unlock(&heap_lock);
                         goto out_nolock;
                     }
@@ -1608,7 +1611,7 @@ bool scrub_free_pages(void)
                 st.drop = false;
                 spin_lock_cb(&heap_lock, scrub_continue, &st);
 
-                node_need_scrub[node] -= dirty_cnt;
+                per_node[node]->need_scrub -= dirty_cnt;
 
                 if ( st.drop )
                     goto out;
@@ -1623,7 +1626,7 @@ bool scrub_free_pages(void)
 
                 pg->u.free.scrub_state = BUDDY_NOT_SCRUBBING;
 
-                if ( preempt || (node_need_scrub[node] == 0) )
+                if ( preempt || (per_node[node]->need_scrub == 0) )
                     goto out;
             }
         } while ( order-- != 0 );
@@ -1731,7 +1734,7 @@ static void free_heap_pages(
     
     if ( need_scrub )
     {
-        node_need_scrub[node] += 1 << order;
+        per_node[node]->need_scrub += 1 << order;
         pg->u.free.first_dirty = 0;
     }
     else
@@ -3049,9 +3052,9 @@ static void cf_check dump_heap(unsigned char key)
 
     for ( i = 0; i < MAX_NUMNODES; i++ )
     {
-        if ( !node_need_scrub[i] )
+        if ( !per_node[i]->need_scrub )
             continue;
-        printk("Node %d has %lu unscrubbed pages\n", i, node_need_scrub[i]);
+        printk("Node %d has %lu unscrubbed pages\n", i, per_node[i]->need_scrub);
     }
 
     if ( llc_coloring_enabled )
