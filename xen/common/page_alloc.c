@@ -484,6 +484,8 @@ mfn_t __init alloc_boot_pages(unsigned long nr_pfns, unsigned long pfn_align)
  * per-zone buddy heaps, and the per-node outstanding claims count.
  */
 struct per_node {
+    /* The node's lock protects all fields of this structure */
+    spinlock_t               lock;
     /*
      * avail_pages is the total number of free pages on that node.
      * It is used for efficiently checking if a node could satisfy an allocation
@@ -547,32 +549,71 @@ static struct per_node_cacheline_isolated   node_without_pages;
 #define has_pages(node) (per_node[node] != &node_without_pages.u.per_node)
 
 /*
- * The global heap lock, protecting access to the heap and related structures.
- * It protects the heap and claims, d->outstanding_pages and d->claim_node.
+ * The heap lock for synchronisation when approving/rejecting an allocation
+ * request, host- and domain-level claims (d->outstanding_pages, d->claim_node),
+ * page_offlined_list and page_broken_list.
+ *
+ * Lock ordering: d->page_alloc_lock -> node_lock(node) -> heap_lock
+ * The heap_lock may be taken alone, but inside, you must not take a node_lock.
  */
 static DEFINE_SPINLOCK(heap_lock);
 /* Total outstanding claims by all domains. */
 static unsigned long outstanding_claims;
 
+/*
+ * Per-node lock abstraction for node-local heap operations.
+ *
+ * Currently wraps the global heap_lock; will be switched to
+ * per_node[node]->lock to enable per-node locking granularity.
+ */
+#define node_lock(node)              spin_lock(&per_node[node]->lock)
+#define node_unlock(node)            spin_unlock(&per_node[node]->lock)
+#define node_lock_cb(node, cb, data) spin_lock_cb(&per_node[node]->lock, \
+                                                   cb, data)
+#define node_is_locked(node)         spin_is_locked(&per_node[node]->lock)
+
 /* Return available pages after subtracting claimed pages. */
 static inline unsigned long available_after_claims(unsigned long avail_pages,
                                                    unsigned long claims)
 {
-    BUG_ON(claims > avail_pages);
-    return avail_pages - claims; /* Due to the BUG_ON, it cannot be negative */
+    /*
+     * Saturating subtraction: with per-node locking, relaxed reads of
+     * global counters may transiently show claims > avail_pages.
+     */
+    return (claims <= avail_pages) ? avail_pages - claims : 0;
 }
 
-/* Answer if host-level memory and claims permit this request to proceed */
+/*
+ * Answer if host-level memory and claims permit this request to proceed.
+ *
+ * It is used twice in alloc_heap_pages(): first as a lockless fast-path
+ * filter to check if global memory and claims appear allow the allocation,
+ * and then as the authoritative check under heap_lock as final go/no-go
+ * decision before the per-node allocation.  In the second case, the heap_lock
+ * is held, so the result is exact and an authoritative approval or rejection.
+ */
 static inline bool host_allocatable_request(const struct domain *d,
                                             unsigned int memflags,
                                             unsigned long request)
 {
     unsigned long allocatable_pages;
+    unsigned long avail_pages, claims;
 
-    ASSERT(spin_is_locked(&heap_lock));
-
-    allocatable_pages = available_after_claims(total_avail_pages,
-                                               outstanding_claims);
+    /*
+     * Lockless snapshot of global availability.
+     *
+     * Writer side in consume_outstanding_claims() updates in this order:
+     * outstanding_claims, then smp_wmb(), then total_avail_pages.
+     *
+     * Read total_avail_pages first, then smp_rmb(), then outstanding_claims,
+     * so seeing a newer total_avail_pages implies seeing at least as new
+     * outstanding_claims. This avoids transient underestimation (false
+     * negatives) in lockless fast-path checks.
+     */
+    avail_pages = ACCESS_ONCE(total_avail_pages);
+    smp_rmb();
+    claims = ACCESS_ONCE(outstanding_claims);
+    allocatable_pages = available_after_claims(avail_pages, claims);
     if ( allocatable_pages >= request )
         return true; /* The not claimed pages are enough to proceed */
 
@@ -591,7 +632,7 @@ static inline bool node_allocatable_request(const struct domain *d,
 {
     unsigned long allocatable_pages;
 
-    ASSERT(spin_is_locked(&heap_lock));
+    ASSERT(node_is_locked(node));
     ASSERT(node < MAX_NUMNODES);
 
     allocatable_pages =
@@ -645,6 +686,7 @@ static void release_outstanding_claims(struct domain *d, unsigned long release)
 
     if ( d->claim_node != NUMA_NO_NODE )
     {
+        ASSERT(node_is_locked(d->claim_node));
         BUG_ON(per_node[d->claim_node]->outstanding_claims < release);
         per_node[d->claim_node]->outstanding_claims -= release;
     }
@@ -670,12 +712,18 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages,
     if ( node != NUMA_NO_NODE && (node >= MAX_NUMNODES || !node_online(node)) )
         return -ENOENT;
     /*
-     * Two locks are needed here:
+     * Three locks are needed here(in lock order of acquisition):
      *  - d->page_alloc_lock: protects accesses to d->{tot,max,extra}_pages.
+     *  - node_lock(node): protects accesses to node_avail_pages(node) and
+     *    node_outstanding_claims(node) when node != NUMA_NO_NODE.
      *  - heap_lock: protects accesses to d->outstanding_pages, total_avail_pages
      *    and outstanding_claims.
      */
     nrspin_lock(&d->page_alloc_lock);
+    if ( pages == 0 ) /* When releasing, the node releasing is the claim node */
+        node = d->claim_node;
+    if ( node != NUMA_NO_NODE )
+        node_lock(node); /* Protect per-node avail pages & outstanding claims */
     spin_lock(&heap_lock);
 
     /* pages==0 means "unset" the claim. */
@@ -702,8 +750,8 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages,
 
     /* how much memory is available? */
     if ( node == NUMA_NO_NODE )
-        avail_pages = available_after_claims(total_avail_pages,
-                                             outstanding_claims);
+        avail_pages = available_after_claims(ACCESS_ONCE(total_avail_pages),
+                                             ACCESS_ONCE(outstanding_claims));
     else
         avail_pages =
             available_after_claims(per_node[node]->avail_pages,
@@ -729,6 +777,8 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages,
 
 out:
     spin_unlock(&heap_lock);
+    if ( node != NUMA_NO_NODE )
+        node_unlock(node);
     nrspin_unlock(&d->page_alloc_lock);
     return ret;
 }
@@ -799,6 +849,7 @@ static unsigned long init_node_heap(int node, unsigned long mfn,
     }
 
     memset(per_node[node], 0, sizeof(*per_node[node]));
+    spin_lock_init(&per_node[node]->lock);
 
     for ( i = 0; i < NR_ZONES; i++ )
         for ( j = 0; j <= MAX_ORDER; j++ )
@@ -879,7 +930,8 @@ static void __init setup_low_mem_virq(void)
 
 static void check_low_mem_virq(void)
 {
-    unsigned long avail_pages = total_avail_pages - outstanding_claims;
+    unsigned long avail_pages = ACCESS_ONCE(total_avail_pages) -
+                                ACCESS_ONCE(outstanding_claims);
 
     if ( unlikely(avail_pages <= low_mem_virq_th) )
     {
@@ -1050,9 +1102,14 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
      * Start with requested node, but exhaust all node memory in requested
      * zone before failing, only calc new node value if we fail to find memory
      * in target node, this avoids needless computation on fast-path.
+     *
+     * Per-node locking: each node attempt acquires node_lock(node).
+     * On success, returns with node_lock held (caller must unlock).
+     * On failure/skip, node_unlock is called before trying the next node.
      */
     for ( ; ; )
     {
+        node_lock(node);
         /* Check if the target node and its claims can support the allocation */
         if ( !node_allocatable_request(d, memflags, (1UL << order), node) )
             goto try_next_node;
@@ -1069,7 +1126,7 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
                 if ( (pg = page_list_remove_head(&heap(node, zone, j))) )
                 {
                     if ( pg->u.free.first_dirty == INVALID_DIRTY_IDX )
-                        return pg;
+                        return pg; /* node_lock held */
                     /*
                      * We grab single pages (order=0) even if they are
                      * unscrubbed. Given that scrubbing one page is fairly quick
@@ -1078,7 +1135,7 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
                     if ( (order == 0) || use_unscrubbed )
                     {
                         check_and_stop_scrub(pg);
-                        return pg;
+                        return pg; /* node_lock held */
                     }
 
                     page_list_add_tail(pg, &heap(node, zone, j));
@@ -1087,6 +1144,7 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
         } while ( zone-- > zone_lo ); /* careful: unsigned zone may wrap */
 
  try_next_node:
+        node_unlock(node);
         /* If MEMF_exact_node was passed, we may not skip to a different node */
         if ( (memflags & MEMF_exact_node) && req_node != NUMA_NO_NODE )
             return NULL;
@@ -1151,7 +1209,17 @@ static void consume_outstanding_claims(struct domain *d,
         /* Excess detected, release the exceeding pages from the claimed node */
         consume = min(consume, booked_pages - d->max_pages);
     }
+    /*
+     * Reduce claims before reducing available pages by the allocation.
+     *
+     * If we were to reduce available pages first, a lockless check could
+     * underestimate allocatable memory and fail spuriously. By reducing claims
+     * first, lockless checks may transiently overestimate allocatable memory,
+     * but the authoritative check under heap_lock remains exact.
+     */
     release_outstanding_claims(d, consume);
+    /* Paired with smp_rmb() in host_allocatable_request() */
+    smp_wmb();
 }
 
 /* Allocate 2^@order contiguous pages. */
@@ -1178,56 +1246,53 @@ static struct page_info *alloc_heap_pages(
     if ( unlikely(order > MAX_ORDER) )
         return NULL;
 
-    spin_lock(&heap_lock);
-
-    /* Proceed if host-level memory and claims permit this request to proceed */
-    if ( !host_allocatable_request(d, memflags, request) )
-    {
-        spin_unlock(&heap_lock);
+    /*
+     * Lockless fast-path filter: reject obviously impossible requests without
+     * taking heap_lock.
+     *
+     * Allocation accounting reduces claims before reducing available pages.
+     * Therefore, a concurrent lockless check may transiently overestimate
+     * allocatable memory: it can pass here but be denied by the authoritative
+     * check under heap_lock for finalizing the allocation and consuming claims
+     * below. This ordering of first reducing claims avoids spurious allocation
+     * instead of first reducing available pages, which would be harmful.
+     */
+    if ( unlikely(!host_allocatable_request(d, memflags, request)) )
         return NULL;
-    }
 
+    /*
+     * get_free_buddy() returns with the allocating node's lock held
+     * on success, or NULL with no lock held on failure.
+     */
     pg = get_free_buddy(zone_lo, zone_hi, order, memflags, d);
     /* Try getting a dirty buddy if we couldn't get a clean one. */
     if ( !pg && !(memflags & MEMF_no_scrub) )
         pg = get_free_buddy(zone_lo, zone_hi, order,
                             memflags | MEMF_no_scrub, d);
     if ( !pg )
-    {
-        /* No suitable memory blocks. Fail the request. */
-        spin_unlock(&heap_lock);
-        return NULL;
-    }
+        return NULL; /* get_free_buddy() unlocked the last node it checked */
 
+    /* node_lock for pg is still held, run final checks before committing it */
     node = page_to_nid(pg);
     zone = page_to_zone(pg);
     buddy_order = PFN_ORDER(pg);
 
     first_dirty = pg->u.free.first_dirty;
 
-    /* We may have to halve the chunk a number of times. */
-    while ( buddy_order != order )
+    /*
+     * We have a buddy, now approve/disapprove the allocation request
+     * against the global memory and claims, authoritatively under heap_lock.
+     * consume_outstanding_claims() needs the heap_lock to protect the claims
+     * consumption and get the final go/no-go before committing the allocation.
+     */
+    spin_lock(&heap_lock);
+    if ( unlikely(!host_allocatable_request(d, memflags, request)) )
     {
-        buddy_order--;
-        page_list_add_scrub(pg, node, zone, buddy_order,
-                            (1U << buddy_order) > first_dirty ?
-                            first_dirty : INVALID_DIRTY_IDX);
-        pg += 1U << buddy_order;
-
-        if ( first_dirty != INVALID_DIRTY_IDX )
-        {
-            /* Adjust first_dirty */
-            if ( first_dirty >= 1U << buddy_order )
-                first_dirty -= 1U << buddy_order;
-            else
-                first_dirty = 0; /* We've moved past original first_dirty */
-        }
+        spin_unlock(&heap_lock);
+        page_list_add_scrub(pg, node, zone, buddy_order, first_dirty);
+        node_unlock(node);
+        return NULL;
     }
-
-    ASSERT(total_avail_pages >= request);
-    total_avail_pages -= request;
-    per_node[node]->avail_pages -= request;
-    per_node[node]->avail[zone] -= request;
 
     if ( !(memflags & MEMF_no_refcount) )
         /*
@@ -1247,7 +1312,38 @@ static struct page_info *alloc_heap_pages(
          */
         consume_outstanding_claims(d, request, node);
 
+    /*
+     * NB. Reduce available pages after reducing claims, see
+     * host_allocatable_request() and consume_outstanding_claims() for details.
+     */
+    ASSERT(total_avail_pages >= request);
+    arch_fetch_and_add(&total_avail_pages, -(long)request);
+    ASSERT(per_node[node]->avail_pages >= request);
+    per_node[node]->avail_pages -= request;
+    ASSERT(per_node[node]->avail[zone] >= request);
+    per_node[node]->avail[zone] -= request;
+
     check_low_mem_virq();
+    spin_unlock(&heap_lock);
+
+    /* We may have to halve the chunk a number of times. */
+    while ( buddy_order != order )
+    {
+        buddy_order--;
+        page_list_add_scrub(pg, node, zone, buddy_order,
+                            (1U << buddy_order) > first_dirty ?
+                            first_dirty : INVALID_DIRTY_IDX);
+        pg += 1U << buddy_order;
+
+        if ( first_dirty != INVALID_DIRTY_IDX )
+        {
+            /* Adjust first_dirty */
+            if ( first_dirty >= 1U << buddy_order )
+                first_dirty -= 1U << buddy_order;
+            else
+                first_dirty = 0; /* We've moved past original first_dirty */
+        }
+    }
 
     if ( d != NULL )
         d->last_alloc_node = node;
@@ -1278,7 +1374,7 @@ static struct page_info *alloc_heap_pages(
         init_free_page_fields(&pg[i]);
     }
 
-    spin_unlock(&heap_lock);
+    node_unlock(node);
 
     if ( first_dirty != INVALID_DIRTY_IDX ||
          (scrub_debug && !(memflags & MEMF_no_scrub)) )
@@ -1300,9 +1396,9 @@ static struct page_info *alloc_heap_pages(
 
         if ( dirty_cnt )
         {
-            spin_lock(&heap_lock);
+            node_lock(node);
             per_node[node]->need_scrub -= dirty_cnt;
-            spin_unlock(&heap_lock);
+            node_unlock(node);
         }
     }
 
@@ -1328,7 +1424,7 @@ static int reserve_offlined_page(struct page_info *head)
     struct page_info *cur_head;
     unsigned int cur_order, first_dirty;
 
-    ASSERT(spin_is_locked(&heap_lock));
+    ASSERT(node_is_locked(node));
 
     cur_head = head;
 
@@ -1403,10 +1499,12 @@ static int reserve_offlined_page(struct page_info *head)
         if ( !page_state_is(cur_head, offlined) )
             continue;
 
-        total_avail_pages--;
-        per_node[node]->avail_pages--;
-        per_node[node]->avail[zone]--;
         ASSERT(total_avail_pages >= 0);
+        arch_fetch_and_add(&total_avail_pages, -1L);
+        ASSERT(per_node[node]->avail_pages > 0);
+        per_node[node]->avail_pages--;
+        ASSERT(per_node[node]->avail[zone] > 0);
+        per_node[node]->avail[zone]--;
 
         page_list_add_tail(cur_head,
                            test_bit(_PGC_broken, &cur_head->count_info) ?
@@ -1528,7 +1626,7 @@ bool scrub_free_pages(void)
     if ( node == NUMA_NO_NODE )
         return false;
 
-    spin_lock(&heap_lock);
+    node_lock(node);
 
     for ( zone = 0; zone < NR_ZONES; zone++ )
     {
@@ -1548,7 +1646,7 @@ bool scrub_free_pages(void)
                 ASSERT(pg->u.free.scrub_state == BUDDY_NOT_SCRUBBING);
                 pg->u.free.scrub_state = BUDDY_SCRUBBING;
 
-                spin_unlock(&heap_lock);
+                node_unlock(node);
 
                 dirty_cnt = 0;
 
@@ -1578,9 +1676,9 @@ bool scrub_free_pages(void)
                         smp_wmb();
                         pg->u.free.scrub_state = BUDDY_NOT_SCRUBBING;
 
-                        spin_lock(&heap_lock);
+                        node_lock(node);
                         per_node[node]->need_scrub -= dirty_cnt;
-                        spin_unlock(&heap_lock);
+                        node_unlock(node);
                         goto out_nolock;
                     }
 
@@ -1609,7 +1707,7 @@ bool scrub_free_pages(void)
                 st.first_dirty = (i >= (1U << order) - 1) ?
                     INVALID_DIRTY_IDX : i + 1;
                 st.drop = false;
-                spin_lock_cb(&heap_lock, scrub_continue, &st);
+                node_lock_cb(node, scrub_continue, &st);
 
                 per_node[node]->need_scrub -= dirty_cnt;
 
@@ -1633,7 +1731,7 @@ bool scrub_free_pages(void)
     }
 
  out:
-    spin_unlock(&heap_lock);
+    node_unlock(node);
 
  out_nolock:
     node_clear(node, node_scrubbing);
@@ -1705,7 +1803,7 @@ static void free_heap_pages(
 
     ASSERT(order <= MAX_ORDER);
 
-    spin_lock(&heap_lock);
+    node_lock(node);
 
     for ( i = 0; i < (1 << order); i++ )
     {
@@ -1723,7 +1821,7 @@ static void free_heap_pages(
             ASSERT(order == 0);
 
             free_color_heap_page(pg, need_scrub);
-            spin_unlock(&heap_lock);
+            node_unlock(node);
             return;
         }
     }
@@ -1800,7 +1898,7 @@ static void free_heap_pages(
     if ( pg_offlined )
         reserve_offlined_page(pg);
 
-    spin_unlock(&heap_lock);
+    node_unlock(node);
 }
 
 
@@ -1815,7 +1913,7 @@ static unsigned long mark_page_offline(struct page_info *pg, int broken)
     unsigned long nx, x, y = pg->count_info;
 
     ASSERT(page_is_offlinable(page_to_mfn(pg)));
-    ASSERT(spin_is_locked(&heap_lock));
+    ASSERT(node_is_locked(page_to_nid(pg)));
 
     do {
         nx = x = y;
@@ -1868,6 +1966,7 @@ int offline_page(mfn_t mfn, int broken, uint32_t *status)
     unsigned long old_info = 0;
     struct domain *owner;
     struct page_info *pg;
+    unsigned int node;
 
     if ( !mfn_valid(mfn) )
     {
@@ -1909,7 +2008,8 @@ int offline_page(mfn_t mfn, int broken, uint32_t *status)
         return 0;
     }
 
-    spin_lock(&heap_lock);
+    node = mfn_to_nid(mfn);
+    node_lock(node);
 
     old_info = mark_page_offline(pg, broken);
 
@@ -1917,14 +2017,13 @@ int offline_page(mfn_t mfn, int broken, uint32_t *status)
     {
         reserve_heap_page(pg);
 
-        spin_unlock(&heap_lock);
+        node_unlock(node);
 
         *status = broken ? PG_OFFLINE_OFFLINED | PG_OFFLINE_BROKEN
                          : PG_OFFLINE_OFFLINED;
         return 0;
     }
-
-    spin_unlock(&heap_lock);
+    node_unlock(node);
 
     if ( (owner = page_get_owner_and_reference(pg)) )
     {
@@ -2364,6 +2463,7 @@ void __init end_boot_allocator(void)
     for ( i = 0; i < MAX_NUMNODES; i++ )
         if ( !per_node[i] )
             per_node[i] = &node_without_pages.u.per_node;
+    spin_lock_init(&node_without_pages.u.per_node.lock);
 
     printk("Domain heap initialised");
     if ( dma_bitsize )
