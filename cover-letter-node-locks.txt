@@ -1,0 +1,40 @@
+Subject: [PATCH 0/3] xen/page_alloc: Switch buddy allocator to per-node locks
+
+Hi all,
+
+this series restructures the Xen buddy allocator to group per-node allocator
+state into `struct node_pages`, then uses that groundwork to switch the buddy
+allocator to per-node locking as far as possible while still supporting global
+memory allocations with global memory claims.
+
+The first two patches are structural refactors to improve locality and prepare
+for finer lock granularity. The third patch coverts the purely node-local heap
+to use node_lock(node) and use the heap_lock for global allocation protection.
+
+At a high level:
+- Group per-node allocator bookkeeping into one per-node object.
+- Move global arrays into `struct node_pages` to avoid cross-node cacheline
+  bouncing.
+- Split locking so node-local allocation/free-list operations use per-node
+  locking, with authoritative global claim checks/accounting still under
+  `heap_lock`.
+
+Converted to node_lock():
+- get_free_buddy()
+- alloc_heap_pages() (except when updating global counters/claims)
+- free_heap_pages() and helpers operating on per-node free lists.
+- Node-local scrub accounting and selection/readout paths
+
+Need heap_lock:
+- Global claim/availability checks and accounting:
+  Updating total_avail_pages, outstanding_claims, and claim consume/release.
+- Global low-memory threshold/virq logic and global counters.
+- Global offline/broken lists and flows touching shared global lists/state.
+
+Patch summary:
+1. xen/page_alloc: Consolidate per-node state into struct node_pages
+2. xen/page_alloc: Move per-node need_scrub counter into node_pages
+3. xen/page_alloc: Switch node-local allocator paths to per-node locks
+
+Comments and feedback welcome,
+Bernhard
