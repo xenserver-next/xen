@@ -476,15 +476,75 @@ mfn_t __init alloc_boot_pages(unsigned long nr_pfns, unsigned long pfn_align)
 #define bits_to_zone(b) (((b) < (PAGE_SHIFT + 1)) ? 1U : ((b) - PAGE_SHIFT))
 #define page_to_zone(pg) (is_xen_heap_page(pg) ? MEMZONE_XEN :  \
                           (flsl(mfn_x(page_to_mfn(pg))) ? : 1))
+#define heap(node, zone, order) (per_node[node]->heap[zone][order])
 
-typedef struct page_list_head heap_by_zone_and_order_t[NR_ZONES][MAX_ORDER+1];
-static heap_by_zone_and_order_t *_heap[MAX_NUMNODES];
-#define heap(node, zone, order) ((*_heap[node])[zone][order])
+/*
+ * per_node is the main per-node data structure for the buddy allocator. It
+ * contains the per-node and per-zone available page counts, the per-node and
+ * per-zone buddy heaps, and the per-node outstanding claims count.
+ */
+struct per_node {
+    /*
+     * avail_pages is the total number of free pages on that node.
+     * It is used for efficiently checking if a node could satisfy an allocation
+     * request before consulting the zone-specific avail[] counts and the heap.
+     *
+     * It is also provided via sysctl for NUMA placement decisions of domain
+     * builders and monitoring and logged with debug-key 'u' for NUMA debugging.
+     */
+    unsigned long            avail_pages;
+    /*
+     * The outstanding_claims count is the number of pages claimed by domains
+     * on that node but not yet allocated to them. It is used to determine if
+     * an allocation request can be satisfied without violating the node's
+     * memory availability when considering both free pages and claimed pages.
+     */
+    unsigned long            outstanding_claims;
+    /*
+     * avail is the number of free pages on that node and zone, used to check
+     * if a zone could satisfy an allocation request before consulting the heap.
+     */
+    unsigned long            avail[NR_ZONES];
+    /* The free pages of the node, organised in buddy heaps by zone and order */
+    struct page_list_head    heap[NR_ZONES][MAX_ORDER+1];
+} __cacheline_aligned;
+
+/*
+ * Cacheline-isolated storage for static per_node instances.
+ *
+ * We want to avoid any sharing of cachelines between the per_node of the
+ * first NUMA node which has to be statically allocated by init_node_heap()
+ * and other data. Therefore we wrap the per_node in a union with padding to
+ * expand it to a whole number of cachelines to be allocated on the static heap.
+ */
+struct per_node_cacheline_isolated {
+    union {
+        struct per_node per_node;
+        /* Expands the union to a whole number of cachelines */
+        char __pad[L1_CACHE_ALIGN(sizeof(struct per_node))];
+    } u;
+} __cacheline_aligned;
+
+/*
+ * per_node[node] points to the per_node structure for that node, allocated
+ * from per-node memory, or to node_without_pages if that node has no memory.
+ */
+static struct per_node    *per_node[MAX_NUMNODES];
+
+/*
+ * node_without_pages is used for nodes without memory, to avoid the need for
+ * NULL checks on per_node[node]. It is initialized to all-zero, so avail[]
+ * and outstanding_claims will be zero, and heap[] will be empty, as
+ * appropriate for a node without memory. As it is never written to after
+ * initialization, it may be shared between all nodes without memory.
+ */
+static struct per_node_cacheline_isolated   node_without_pages;
+#define has_pages(node) (per_node[node] != &node_without_pages.u.per_node)
 
 static unsigned long node_need_scrub[MAX_NUMNODES];
 
-/* avail[node][zone] is the number of free pages on that node and zone. */
-static unsigned long *avail[MAX_NUMNODES];
+/* avail(node, zone) is the number of free pages on that node and zone. */
+#define avail(node, zone) (per_node[node]->avail[zone])
 /* Global available pages, updated in real-time, protected by heap_lock */
 static unsigned long total_avail_pages;
 
@@ -507,8 +567,7 @@ static DEFINE_SPINLOCK(heap_lock);
  * allocator is already serialized on it. The accessor macro abstracts the
  * storage to ease future changes (e.g. moving to per-node lock granularity).
  */
-#define node_avail_pages(node) (node_avail_pages[node])
-static unsigned long node_avail_pages[MAX_NUMNODES];
+#define node_avail_pages(node) (per_node[node]->avail_pages)
 
 /* total outstanding claims by all domains */
 static unsigned long outstanding_claims;
@@ -522,9 +581,7 @@ static unsigned long outstanding_claims;
  * a node, which are subtracted from the node's available pages to determine if
  * a request can be satisfied without violating the node's memory availability.
  */
-#define node_outstanding_claims(node) (node_outstanding_claims[node])
-/* total outstanding claims by all domains on node */
-static unsigned long node_outstanding_claims[MAX_NUMNODES];
+#define node_outstanding_claims(node) (per_node[node]->outstanding_claims)
 
 /* Return available pages after subtracting claimed pages */
 static inline unsigned long available_after_claims(unsigned long avail_pages,
@@ -589,11 +646,11 @@ static unsigned long avail_heap_pages(
 
     for_each_online_node(i)
     {
-        if ( !avail[i] )
+        if ( !node_avail_pages(i) )
             continue;
         for ( zone = zone_lo; zone <= zone_hi; zone++ )
             if ( (node == -1) || (node == i) )
-                free_pages += avail[i][zone];
+                free_pages += avail(i, zone);
     }
 
     return free_pages;
@@ -763,17 +820,14 @@ static unsigned long init_node_heap(int node, unsigned long mfn,
                                     unsigned long nr, bool *use_tail)
 {
     /* First node to be discovered has its heap metadata statically alloced. */
-    static heap_by_zone_and_order_t _heap_static;
-    static unsigned long avail_static[NR_ZONES];
-    unsigned long needed = (sizeof(**_heap) +
-                            sizeof(**avail) * NR_ZONES +
+    static struct per_node_cacheline_isolated _per_node_static;
+    unsigned long needed = (sizeof(_per_node_static) +
                             PAGE_SIZE - 1) >> PAGE_SHIFT;
     int i, j;
 
     if ( !first_node_initialised )
     {
-        _heap[node] = &_heap_static;
-        avail[node] = avail_static;
+        per_node[node] = &_per_node_static.u.per_node;
         first_node_initialised = true;
         needed = 0;
     }
@@ -782,38 +836,35 @@ static unsigned long init_node_heap(int node, unsigned long mfn,
               (!xenheap_bits ||
                !((mfn + nr - 1) >> (xenheap_bits - PAGE_SHIFT))) )
     {
-        _heap[node] = mfn_to_virt(mfn + nr - needed);
-        avail[node] = mfn_to_virt(mfn + nr - 1) +
-                      PAGE_SIZE - sizeof(**avail) * NR_ZONES;
+        per_node[node] = mfn_to_virt(mfn + nr - needed);
     }
     else if ( nr >= needed &&
               arch_mfns_in_directmap(mfn, needed) &&
               (!xenheap_bits ||
                !((mfn + needed - 1) >> (xenheap_bits - PAGE_SHIFT))) )
     {
-        _heap[node] = mfn_to_virt(mfn);
-        avail[node] = mfn_to_virt(mfn + needed - 1) +
-                      PAGE_SIZE - sizeof(**avail) * NR_ZONES;
+        per_node[node] = mfn_to_virt(mfn);
         *use_tail = false;
     }
-    else if ( get_order_from_bytes(sizeof(**_heap)) ==
+    else if ( get_order_from_bytes(sizeof(**per_node)) ==
               get_order_from_pages(needed) )
     {
-        _heap[node] = alloc_xenheap_pages(get_order_from_pages(needed), 0);
-        BUG_ON(!_heap[node]);
-        avail[node] = (void *)_heap[node] + (needed << PAGE_SHIFT) -
-                      sizeof(**avail) * NR_ZONES;
+        per_node[node] = alloc_xenheap_pages(get_order_from_pages(needed), 0);
+        BUG_ON(!per_node[node]);
         needed = 0;
     }
     else
     {
-        _heap[node] = xmalloc(heap_by_zone_and_order_t);
-        avail[node] = xmalloc_array(unsigned long, NR_ZONES);
-        BUG_ON(!_heap[node] || !avail[node]);
+        /* Fallback to xmalloc() if the previous methods are not suitable. */
+        struct per_node_cacheline_isolated *_per_node;
+
+        _per_node = xmalloc(struct per_node_cacheline_isolated);
+        BUG_ON(!_per_node);
+        per_node[node] = &_per_node->u.per_node;
         needed = 0;
     }
 
-    memset(avail[node], 0, NR_ZONES * sizeof(long));
+    memset(per_node[node], 0, sizeof(*per_node[node]));
 
     for ( i = 0; i < NR_ZONES; i++ )
         for ( j = 0; j <= MAX_ORDER; j++ )
@@ -1077,8 +1128,7 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
 
         zone = zone_hi;
         do {
-            /* Check if target node can support the allocation. */
-            if ( !avail[node] || (avail[node][zone] < (1UL << order)) )
+            if ( avail(node, zone) < (1UL << order) )
                 continue;
 
             /* Find smallest order which can satisfy the request. */
@@ -1210,8 +1260,8 @@ static struct page_info *alloc_heap_pages(
         }
     }
 
-    ASSERT(avail[node][zone] >= request);
-    avail[node][zone] -= request;
+    ASSERT(avail(node, zone) >= request);
+    avail(node, zone) -= request;
     ASSERT(node_avail_pages(node) >= request);
     node_avail_pages(node) -= request;
     ASSERT(total_avail_pages >= request);
@@ -1376,7 +1426,7 @@ static int reserve_offlined_page(struct page_info *head)
         if ( !page_state_is(cur_head, offlined) )
             continue;
 
-        avail[node][zone]--;
+        avail(node, zone)--;
         ASSERT(node_avail_pages(node) > 0);
         node_avail_pages(node)--;
         ASSERT(total_avail_pages > 0);
@@ -1702,7 +1752,7 @@ static void free_heap_pages(
         }
     }
 
-    avail[node][zone] += 1 << order;
+    avail(node, zone) += 1 << order;
     node_avail_pages(node) += 1 << order;
     total_avail_pages += 1 << order;
     if ( need_scrub )
@@ -2040,7 +2090,7 @@ static void _init_heap_pages(const struct page_info *pg,
 
     s = mfn_x(page_to_mfn(pg));
     e = mfn_x(mfn_add(page_to_mfn(pg + nr_pages - 1), 1));
-    if ( unlikely(!avail[nid]) )
+    if ( unlikely(!per_node[nid]) )
     {
         bool use_tail = IS_ALIGNED(s, 1UL << MAX_ORDER) &&
                         (ffsl(e) <= ffsl(s));
@@ -2332,6 +2382,11 @@ void __init end_boot_allocator(void)
 
     if ( !dma_bitsize && arch_want_default_dmazone() )
         dma_bitsize = arch_get_dma_bitsize();
+
+    /* Initialize the per_node[] of nodes without pages. */
+    for ( i = 0; i < MAX_NUMNODES; i++ )
+        if ( !per_node[i] )
+            per_node[i] = &node_without_pages.u.per_node;
 
     printk("Domain heap initialised");
     if ( dma_bitsize )
@@ -3011,11 +3066,11 @@ static void cf_check dump_heap(unsigned char key)
 
     for ( i = 0; i < MAX_NUMNODES; i++ )
     {
-        if ( !avail[i] )
+        if ( !has_pages(i) )
             continue;
         for ( j = 0; j < NR_ZONES; j++ )
             printk("heap[node=%d][zone=%d] -> %lu pages\n",
-                   i, j, avail[i][j]);
+                   i, j, avail(i, j));
     }
 
     for ( i = 0; i < MAX_NUMNODES; i++ )
