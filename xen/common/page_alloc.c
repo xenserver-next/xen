@@ -1149,7 +1149,6 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
     nodemask_t nodemask = node_online_map;
     unsigned int j, zone, nodemask_retry = 0;
     struct page_info *pg;
-    bool use_unscrubbed = (memflags & MEMF_no_scrub);
 
     /*
      * d->node_affinity is our preferred allocation set if provided, but it
@@ -1202,33 +1201,13 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
         if ( !node_allocatable_request(d, memflags, (1UL << order), node) )
             goto try_next_node;
 
-        zone = zone_hi;
-        do {
-            if ( avail(node, zone) < (1UL << order) )
-                continue;
-
-            /* Find smallest order which can satisfy the request. */
-            for ( j = order; j <= MAX_ORDER; j++ )
-            {
-                if ( (pg = page_list_remove_head(&heap(node, zone, j))) )
-                {
-                    if ( pg->u.free.first_dirty == INVALID_DIRTY_IDX )
+        /* Find a zone on node which can satisfy the request. */
+        for (zone = zone_hi; zone >= zone_lo; zone--)
+            if ( avail(node, zone) >= (1UL << order) )
+                /* Find smallest order in zone which can satisfy the request. */
+                for ( j = order; j <= MAX_ORDER; j++ )
+                    if ( (pg = page_list_remove_head(&heap(node, zone, j))) )
                         return pg; /* node_lock held */
-                    /*
-                     * We grab single pages (order=0) even if they are
-                     * unscrubbed. Given that scrubbing one page is fairly quick
-                     * it is not worth breaking higher orders.
-                     */
-                    if ( (order == 0) || use_unscrubbed )
-                    {
-                        check_and_stop_scrub(pg);
-                        return pg; /* node_lock held */
-                    }
-
-                    page_list_add_tail(pg, &heap(node, zone, j));
-                }
-            }
-        } while ( zone-- > zone_lo ); /* careful: unsigned zone may wrap */
 
  try_next_node:
         node_unlock(node);
@@ -1356,6 +1335,10 @@ static struct page_info *alloc_heap_pages(
     node_avail_pages(node) -= request;
     ASSERT(avail(node, zone) >= request);
     avail(node, zone) -= request;
+
+    /* If the page is dirty, ensure that we stop any ongoing scrub */
+    if ( first_dirty != INVALID_DIRTY_IDX )
+        check_and_stop_scrub(pg);
 
     /* We may have to halve the chunk a number of times. */
     while ( buddy_order != order )
