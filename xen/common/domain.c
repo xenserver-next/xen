@@ -275,6 +275,35 @@ int get_domain_state(struct xen_domctl_get_domain_state *info, struct domain *d,
     return rc;
 }
 
+/* Claim memory for a domain (or if a claim exists, release the claim) */
+int claim_memory(struct domain *d, const struct xen_domctl_claim_memory *uinfo)
+{
+    memory_claim_t claim;
+
+    /* alloc_color_heap_page() does not handle claims, reject LLC coloring. */
+    if ( llc_coloring_enabled )
+        return -EOPNOTSUPP;
+    /*
+     * We only support single claims at the moment, and if the domain is
+     * dying (d->is_dying is set), its claims have already been released.
+     */
+    if ( uinfo->pad || uinfo->nr_claims != 1 || d->is_dying )
+        return -EINVAL;
+
+    if ( copy_from_guest(&claim, uinfo->claims, 1) )
+        return -EFAULT;
+
+    if ( claim.pad )
+        return -EINVAL;
+
+    /* Convert the API tag for a global claim to the NUMA_NO_NODE constant. */
+    if ( claim.node == XEN_DOMCTL_CLAIM_MEMORY_NO_NODE )
+        claim.node = NUMA_NO_NODE;
+
+    /* NB. domain_set_outstanding_pages() checks the limits of its arguments. */
+    return domain_set_outstanding_pages(d, claim.pages, claim.node);
+}
+
 static void __domain_finalise_shutdown(struct domain *d)
 {
     struct vcpu *v;
