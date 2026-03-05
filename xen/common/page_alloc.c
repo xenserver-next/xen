@@ -541,8 +541,17 @@ unsigned long domain_adjust_tot_pages(struct domain *d, long pages)
 }
 
 /*
- * Update outstanding claims for the domain. Note: The node is passed as an
- * unsigned int to allow checking for overflow above the uint8_t nodeid_t limit.
+ * Update outstanding claims for the domain.
+ *
+ * A domain can have either a global host-wide claim (pages > 0, node_claims == 0)
+ * or per-NUMA-node claims (pages == 0, node_claims > 0), but not both.
+ *
+ * Parameters:
+ *  - pages: Total pages for a host-wide claim.  Must be 0 when node_claims > 0.
+ *  - node_claims: Number of entries in the claims array (indexed by node ID).
+ *  - claims: Array of per-node page counts, indexed by NUMA node ID.
+ *
+ * Calling with pages == 0 and node_claims == 0 releases all claims.
  */
 int domain_set_outstanding_pages(struct domain *d, unsigned long pages,
                                  unsigned int node_claims,
@@ -556,6 +565,11 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages,
         return -EINVAL;
     if ( node_claims != 0 && pages != 0 )
         return -EINVAL;
+
+    /* Validate that all claimed nodes are online */
+    for ( node = 0; node < node_claims; node++ )
+        if ( claims[node] && !node_online(node) )
+            return -EINVAL;
     /*
      * Two locks are needed here:
      *  - d->page_alloc_lock: protects accesses to d->{tot,max,extra}_pages.
@@ -565,24 +579,24 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages,
     nrspin_lock(&d->page_alloc_lock);
     spin_lock(&heap_lock);
 
-    /* nr_claims==0 means: Reset all claims of the domain. */
+    /* node_claims==0 means: Reset all claims of the domain. */
     if ( pages == 0 && node_claims == 0 )
     {
+        /* Defensively clear both claim types unconditionally. */
         if ( d->outstanding_pages )
         {
             outstanding_claims -= d->outstanding_pages;
             d->outstanding_pages = 0;
         }
-        else
-            for ( node = 0; node < MAX_NUMNODES; node++ )
+        for ( node = 0; node < MAX_NUMNODES; node++ )
+        {
+            if ( d->claims[node] )
             {
-                if ( d->claims[node] )
-                {
-                    outstanding_claims -= d->claims[node];
-                    node_outstanding_claims[node] -= d->claims[node];
-                    d->claims[node] = 0;
-                }
+                outstanding_claims -= d->claims[node];
+                node_outstanding_claims[node] -= d->claims[node];
+                d->claims[node] = 0;
             }
+        }
         ret = 0;
         goto out;
     }
@@ -1097,7 +1111,7 @@ static void consume_outstanding_claims(struct domain *d,
     }
     else
     {
-        unsigned long booked_pages, excess, node_consume;
+        unsigned long booked_pages, remaining_claims, excess, node_consume;
 
         consume = min(allocation, d->claims[alloc_node] + 0UL);
         if ( consume )
@@ -1113,24 +1127,32 @@ static void consume_outstanding_claims(struct domain *d,
         if ( !consume )
             return;
 
-        booked_pages = domain_tot_pages(d) + allocation + d->outstanding_pages;
+        /* Compute sum of remaining per-node claims. */
+        remaining_claims = 0;
+        for ( node = 0; node < MAX_NUMNODES; node++ )
+            remaining_claims += d->claims[node];
+
+        booked_pages = domain_tot_pages(d) + allocation + remaining_claims;
         if ( booked_pages <= d->max_pages )
             return; /* booked is within max_pages, no excess, keep the claim */
 
-        /* Excess detected, release the exceeding pages from the claimed node */
+        /* Excess detected, release the exceeding pages from claimed nodes. */
         excess = min(consume, booked_pages - d->max_pages);
         /*
-         * The domain claims, but not on the alloc_node. If it would exceed
-         * the domain's max_pages, reduce the claim up to the excess over
-         * max_pages so we don't reduce the claim more than we have to
-         * honor the max_pages limit.
+         * The domain has claims, but not on alloc_node. If the allocation
+         * would exceed the domain's max_pages, reduce claims on other nodes
+         * up to the excess over max_pages so we don't reduce claims more
+         * than necessary to honor the max_pages limit.
          */
-        for (node = 0; excess > 0 && node < MAX_NUMNODES; node++) {
+        for ( node = 0; excess > 0 && node < MAX_NUMNODES; node++ )
+        {
             if ( !d->claims[node] )
                 continue;
 
             node_consume = min(excess, d->claims[node] + 0UL);
+            ASSERT(outstanding_claims >= node_consume);
             ASSERT(node_outstanding_claims[node] >= node_consume);
+            outstanding_claims -= node_consume;
             node_outstanding_claims[node] -= node_consume;
             d->claims[node] -= node_consume;
             excess -= node_consume;
