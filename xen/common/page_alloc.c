@@ -529,10 +529,10 @@ static int release_global_claims(struct domain *d, unsigned long release)
      * If the allocation was larger than the claims, do not release beyond it.
      * Use min_t over + 0UL for clarity to make the comparison type explicit.
      */
-    consume = min_t(unsigned long, release, d->outstanding_pages);
+    consume = min_t(unsigned long, release, d->global_claims);
     ASSERT(consume <= outstanding_claims);
     outstanding_claims -= consume;
-    d->outstanding_pages -= consume;
+    d->global_claims -= consume;
     return consume;
 }
 
@@ -544,7 +544,7 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
     /*
      * Two locks are needed here:
      *  - d->page_alloc_lock: protects accesses to d->{tot,max,extra}_pages.
-     *  - heap_lock: protects accesses to d->outstanding_pages, total_avail_pages
+     *  - heap_lock: protects accesses to d->*claims, total_avail_pages
      *    and outstanding_claims.
      */
     nrspin_lock(&d->page_alloc_lock);
@@ -553,13 +553,13 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
     /* pages==0 means "unset" the claim. */
     if ( pages == 0 )
     {
-        release_global_claims(d, d->outstanding_pages);
+        release_global_claims(d, d->global_claims);
         ret = 0;
         goto out;
     }
 
     /* only one active claim per domain please */
-    if ( d->outstanding_pages )
+    if ( d->global_claims )
     {
         ret = -EINVAL;
         goto out;
@@ -586,8 +586,8 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
         goto out;
 
     /* yay, claim fits in available memory, stake the claim, success! */
-    d->outstanding_pages = claim;
-    outstanding_claims += d->outstanding_pages;
+    d->global_claims = claim;
+    outstanding_claims += claim;
     ret = 0;
 
 out:
@@ -892,7 +892,7 @@ static bool claims_permit_request(const struct domain *d,
     if ( !d || (memflags & MEMF_no_refcount) )
         return false;
 
-    return request <= unclaimed_pages + d->outstanding_pages;
+    return request <= unclaimed_pages + d->global_claims;
 }
 
 static struct page_info *get_free_buddy(unsigned int zone_lo,
@@ -1094,10 +1094,9 @@ static struct page_info *alloc_heap_pages(
          * adjusted, not doing so would lead to a window where the amount of
          * free memory (avail - claimed) would be incorrect.
          *
-         * Note that by adjusting the claimed amount here it's possible for
-         * pages to fail to be assigned to the claiming domain while already
-         * having been subtracted from d->outstanding_pages.  Such claimed
-         * amount is then lost, as the pages that fail to be assigned to the
+         * NB. After releasing claims for the allocation here, note that
+         * assign_pages() might still fail. The released claimed pages
+         * are then lost because the pages that failed to be assigned to the
          * domain are freed without replenishing the claim.  This is fine given
          * claims are only to be used during physmap population as part of
          * domain build, and any failure in assign_pages() there will result in
@@ -1286,7 +1285,7 @@ static int reserve_offlined_page(struct page_info *head)
          */
         for_each_domain ( d )
         {
-            if ( d->outstanding_pages )
+            if ( d->global_claims )
             {
                 recall -= release_global_claims(d, recall);
                 if ( recall <= 0 )
