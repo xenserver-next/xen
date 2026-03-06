@@ -1292,8 +1292,9 @@ DEFINE_XEN_GUEST_HANDLE(memory_claim_t);
 /*
  * XEN_DOMCTL_claim_memory
  *
- * Claim memory for a guest domain. The claimed memory is converted into actual
- * memory pages by allocating it. It supports new multi-node NUMA claims, but
+ * Claim memory for a guest domain. The claim reserves memory against
+ * concurrent allocations until the domain is populated with pages; it does
+ * not pre-allocate memory. It supports new multi-node NUMA claims, but
  * also global claims for backward compatibility. When claiming memory on NUMA
  * nodes, the semantics are based on host-wide claims similar to those of
  * XENMEM_claim_pages, but with the ability to specify the target NUMA node
@@ -1307,7 +1308,7 @@ struct xen_domctl_claim_memory {
     uint32_t pad;  /* Explicit padding: Reserved, initialize to 0 on input */
 };
 /* Maximum number of claims array elements API functions must support */
-#define XEN_DOMCTL_MAX_CLAIMS UINT8_MAX
+#define XEN_DOMCTL_CLAIM_MEMORY_MAX_CLAIMS UINT8_MAX
 
 struct xen_domctl {
 /* Stable domctl ops: interface_version is required to be 0.  */
@@ -1400,7 +1401,8 @@ struct xen_domctl {
 #define XEN_DOMCTL_dt_overlay                    87
 #define XEN_DOMCTL_gsi_permission                88
 #define XEN_DOMCTL_set_llc_colors                89
-#define XEN_DOMCTL_get_domain_state              90 /* stable interface */
+#define XEN_DOMCTL_get_domain_state              90
+#define XEN_DOMCTL_claim_memory                  91 /* stable interface */
 #define XEN_DOMCTL_gdbsx_guestmemio            1000
 #define XEN_DOMCTL_gdbsx_pausevcpu             1001
 #define XEN_DOMCTL_gdbsx_unpausevcpu           1002
@@ -1469,6 +1471,7 @@ struct xen_domctl {
 #endif
         struct xen_domctl_set_llc_colors    set_llc_colors;
         struct xen_domctl_get_domain_state  get_domain_state;
+        struct xen_domctl_claim_memory      claim_memory;
         uint8_t                             pad[128];
     } u;
 };
