@@ -1276,6 +1276,39 @@ struct xen_domctl_get_domain_state {
     uint64_t unique_id;      /* Unique domain identifier. */
 };
 
+/*
+ * Used to pass an array of claims to domain_set_outstanding_pages().
+ * Passed through by the domctl handler for XEN_DOMCTL_claim_memory.
+ */
+struct xen_memory_claim {
+    uint64_aligned_t pages; /* Number of pages to claim on node or global */
+    uint32_t node; /* Node or XEN_DOMCTL_CLAIM_MEMORY_GLOBAL for global */
+    uint32_t pad;  /* Explicit padding: Reserved, initialize to 0 on input */
+};
+typedef struct xen_memory_claim memory_claim_t;
+#define XEN_DOMCTL_CLAIM_MEMORY_GLOBAL 0xFFFFFFFFU /* No node: global claim */
+DEFINE_XEN_GUEST_HANDLE(memory_claim_t);
+
+/*
+ * XEN_DOMCTL_claim_memory
+ *
+ * Claim memory for a guest domain. The claimed memory is converted into actual
+ * memory pages by allocating it. It supports new multi-node NUMA claims, but
+ * also global claims for backward compatibility. When claiming memory on NUMA
+ * nodes, the semantics are based on host-wide claims similar to those of
+ * XENMEM_claim_pages, but with the ability to specify the target NUMA node
+ * for each claim. For more details, see the guest-guide documentation.
+ */
+struct xen_domctl_claim_memory {
+    /* IN: Array of struct xen_memory_claim */
+    XEN_GUEST_HANDLE_64(memory_claim_t) claims;
+    /* IN: Number of claims in the claims array handle. */
+    uint32_t nr_claims;
+    uint32_t pad;  /* Explicit padding: Reserved, initialize to 0 on input */
+};
+/* Maximum number of claims array elements API functions must support */
+#define XEN_DOMCTL_MAX_CLAIMS UINT8_MAX
+
 struct xen_domctl {
 /* Stable domctl ops: interface_version is required to be 0.  */
     uint32_t cmd;

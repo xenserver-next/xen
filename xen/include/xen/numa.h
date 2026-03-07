@@ -1,7 +1,9 @@
 #ifndef _XEN_NUMA_H
 #define _XEN_NUMA_H
 
+#include <xen/errno.h>
 #include <xen/mm-frame.h>
+#include <public/domctl.h>
 
 #ifdef CONFIG_NUMA
 #include <xen/pdx.h>
@@ -18,6 +20,8 @@ typedef uint8_t nodeid_t;
 #else
 #define MAX_NUMNODES 1
 #endif
+
+#include <xen/nodemask.h>
 
 #define NR_NODE_MEMBLKS (MAX_NUMNODES * 2)
 
@@ -151,5 +155,60 @@ static inline nodeid_t mfn_to_nid(mfn_t mfn)
 #endif
 
 #define page_to_nid(pg) mfn_to_nid(page_to_mfn(pg))
+
+static inline long validate_claim_args(unsigned int nr_claims,
+                                       const memory_claim_t *claims)
+{
+    unsigned long pages;
+#ifdef CONFIG_NUMA
+    unsigned int i;
+    nodemask_t nodes;
+#endif
+
+    if ( nr_claims == 0 || claims == NULL )
+        return -EINVAL;
+
+    /* Validate global claim */
+    if ( nr_claims == 1 && claims[0].node == XEN_DOMCTL_CLAIM_MEMORY_GLOBAL )
+    {
+        /* All relevant page counters in struct domain are unsigned int */
+        if ( claims[0].pages > UINT_MAX )
+            return -ERANGE; /* would overflow types in struct domain */
+
+        if ( claims[0].pad )
+            return -EINVAL;
+
+        return claims[0].pages;
+    }
+#ifndef CONFIG_NUMA
+    return -EOPNOTSUPP; /* Only single global claim supported */
+#else
+    nodes_clear(nodes);
+    pages = 0;
+
+    for ( i = 0; i < nr_claims; i++ )
+    {
+        /* Validate each claim, and check for duplicate nodes */
+        if ( claims[i].node == XEN_DOMCTL_CLAIM_MEMORY_GLOBAL )
+            return -EINVAL; /* Cannot be combined with per-node claims */
+
+        if ( claims[i].node >= MAX_NUMNODES ||
+             !node_online(claims[i].node) )
+            return -ENOENT; /* Node not online/not supported in this build */
+
+        if ( claims[i].pad || nodemask_test(claims[i].node, &nodes) )
+            return -EINVAL; /* Invalid pad or duplicate node */
+
+        node_set(claims[i].node, nodes); /* Set node for duplicate check */
+
+        /* struct domain counters are unsigned int and protect += overflow */
+        if ( claims[i].pages > UINT_MAX || claims[i].pages > INT_MAX - pages )
+            return -ERANGE;
+
+        pages += claims[i].pages;
+    }
+#endif
+    return pages;
+}
 
 #endif /* _XEN_NUMA_H */
