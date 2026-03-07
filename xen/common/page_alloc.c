@@ -519,7 +519,7 @@ unsigned long domain_adjust_tot_pages(struct domain *d, long pages)
 }
 
 /* Release outstanding claims on the domain and the host */
-static void release_global_claims(struct domain *d, unsigned long release)
+static int release_global_claims(struct domain *d, unsigned long release)
 {
     unsigned long consume;
 
@@ -532,6 +532,7 @@ static void release_global_claims(struct domain *d, unsigned long release)
     ASSERT(consume <= outstanding_claims);
     outstanding_claims -= consume;
     d->outstanding_pages -= consume;
+    return consume;
 }
 
 int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
@@ -1246,6 +1247,27 @@ static int reserve_offlined_page(struct page_info *head)
                            &page_broken_list : &page_offlined_list);
 
         count++;
+    }
+
+    if ( count && outstanding_claims - total_avail_pages > 0 )
+    {
+        long recall = outstanding_claims - total_avail_pages;
+        struct domain *d;
+
+        /*
+         * As total_avail_pages is now below outstanding_claims, we need to
+         * recall release some claims to keep the amount of claimed memory in
+         * line with the amount of available memory.
+         */
+        for_each_domain ( d )
+        {
+            if ( d->outstanding_pages )
+            {
+                recall -= release_global_claims(d, recall);
+                if ( recall <= 0 )
+                    break;
+            }
+        };
     }
 
     return count;
