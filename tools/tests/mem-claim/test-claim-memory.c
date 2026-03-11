@@ -1,0 +1,683 @@
+/*
+ * test-claim-memory.c - Test xc_domain_claim_memory() API
+ *
+ * Tests for the xc_domain_claim_memory() API, which allows a domain to
+ * claim a certain number of pages from a specific NUMA node or globally.
+ *
+ * Outstanding claims are tracked in physinfo.outstanding_pages and should be
+ * released when the domain is destroyed.  These tests verify that claims are
+ * reflected in physinfo, that they can be replaced atomically, and that
+ * invalid claims are rejected.
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+#include <err.h>
+#include <errno.h>
+#include <getopt.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <xen-tools/common-macros.h>
+
+#include "mem-claim-lib.h"
+
+static const struct option long_options[] = {
+    {"help", no_argument, NULL, 'h'},
+    {"list", no_argument, NULL, 'l'},
+    {"test", required_argument, NULL, 't'},
+    {"verbose", no_argument, NULL, 'v'},
+    {NULL, 0, NULL, 0},
+};
+
+/*
+ * CM000: basic single-node claim is tracked in outstanding pages and released
+ * when the domain is destroyed.
+ *
+ * Smoke test: claims half the primary node's free pages, verifies they
+ * appear in physinfo.outstanding_pages, then returns.  The fixture destroys
+ * the domain, which releases the claim, and verifies outstanding pages returns
+ * to the pre-test baseline.
+ *
+ * Skipped when NUMA is disabled (num_nodes == 1 and no per-node free pages) or
+ * when there are fewer than 2 free pages available on the primary node.
+ */
+static int run_basic_node_claim(struct test_ctx *ctx)
+{
+    uint64_t pre_claim_outstanding;
+    unsigned long free_pages, total_pages;
+    unsigned long claim_pages;
+    memory_claim_t claim;
+    int rc;
+
+    /* Get the free memory on the test node */
+    ctx->node = ctx->env->primary_node;
+    lib_get_node_free_pages(ctx->env, ctx->node, &free_pages, &total_pages);
+
+    ctx->alloc_pages = lib_default_alloc_pages(free_pages);
+    claim_pages = ctx->alloc_pages;
+    snprintf(ctx->result->params, sizeof(ctx->result->params),
+             "node=%u claim_pages=%lu free_pages=%lu total_pages=%lu",
+             ctx->node, claim_pages, free_pages, total_pages);
+
+    /*
+     * Capture the baseline after domain creation (domain creation doesn't
+     * change outstanding pages, so this equals the fixture's baseline).
+     */
+    rc = lib_get_baseline_outstanding(ctx, &pre_claim_outstanding);
+    if ( rc )
+        return rc;
+
+    claim = (memory_claim_t){.pages = claim_pages, .node = ctx->node};
+    rc = lib_claim_memory(ctx, ctx->domid, 1, &claim, "set basic node claim");
+    if ( rc )
+        return rc;
+
+    return lib_check_claim(
+        ctx, pre_claim_outstanding, claim_pages,
+        "check node claim is reflected in outstanding pages");
+    /* Domain teardown releases the claim; fixture verifies baseline is
+     * restored. */
+}
+
+/*
+ * CM001: global claim is replaced atomically after an allocation.
+ *
+ * Sets an initial global claim, allocates one extent (consuming part of it),
+ * then sets a smaller replacement claim and verifies the outstanding count
+ * reflects the new absolute target.
+ */
+static int run_global_replace_after_alloc(struct test_ctx *ctx)
+{
+    unsigned long free_pages;
+    unsigned long initial_pages;
+    int rc;
+
+    /* Get the global free memory for sizing the initial claim */
+    lib_get_global_free_pages(ctx->env, &free_pages);
+
+    /*
+     * This test needs two valid claim targets: an initial larger claim
+     * and a smaller replacement target after consuming one claimed page.
+     */
+    initial_pages = free_pages;
+    ctx->alloc_pages = free_pages / 2;
+
+    snprintf(ctx->result->params, sizeof(ctx->result->params),
+             "alloc_pages=%lu initial=%lu replacement=%lu global_free=%lu",
+             ctx->alloc_pages, initial_pages, ctx->alloc_pages, free_pages);
+
+    rc = lib_claim_memory(ctx, ctx->domid, 1, /* one claim */
+                          &(memory_claim_t){
+                              .pages = initial_pages,
+                              .node = XEN_DOMCTL_CLAIM_MEMORY_GLOBAL,
+                          },
+                          "set initial global replacement claim");
+    if ( rc )
+        return rc;
+
+    rc = lib_populate_any(ctx, ctx->domid, 0,
+                          "populate one extent to consume part of the claim");
+    if ( rc )
+        return rc;
+
+    rc = lib_claim_memory(ctx, ctx->domid, 1, /* one claim */
+                          &(memory_claim_t){
+                              .pages = ctx->alloc_pages,
+                              .node = XEN_DOMCTL_CLAIM_MEMORY_GLOBAL,
+                           },
+                          "replace global claim with a new absolute target");
+    if ( rc )
+        return rc;
+
+    return lib_release_all_claims(ctx, ctx->domid);
+}
+
+/*
+ * CM002: node-specific claim is replaced atomically after an allocation.
+ *
+ * Same as CM001 but scoped to the primary NUMA node:
+ * Sets an initial node claim, allocates one extent (consuming part of it),
+ * then sets a smaller replacement claim and verifies the outstanding count
+ * reflects the new absolute target.
+ */
+static int run_node_replace_after_alloc(struct test_ctx *ctx)
+{
+    unsigned long free_pages, total_pages, initial_pages;
+    int rc;
+
+    /* Node used for claim sizing, claiming and allocation */
+    ctx->node = ctx->env->primary_node;
+
+    /* Get the free memory on the test node for sizing the initial claim */
+    lib_get_node_free_pages(ctx->env, ctx->node, &free_pages, &total_pages);
+    if ( free_pages < 2 )
+        return lib_skip_test(ctx, "need at 2 free pages on node %u, got %lu",
+                             ctx->node, free_pages);
+    /*
+     * This test needs two valid claim targets: an initial larger claim
+     * and a smaller replacement target after consuming one claimed page.
+     */
+    initial_pages = free_pages;
+    ctx->alloc_pages = free_pages / 2;
+
+    /* Logging of test parameters */
+    snprintf(ctx->result->params, sizeof(ctx->result->params),
+             "node=%u initial=%lu replacement=%lu node_free=%lu", ctx->node,
+             initial_pages, ctx->alloc_pages, free_pages);
+
+    /* Create the claim with initial_pages */
+    rc = lib_claim_memory(ctx, ctx->domid, 1, /* one claim */
+                          &(memory_claim_t){
+                              .pages = initial_pages,
+                              .node = ctx->node,
+                          },
+                          "set initial node-specific replacement claim");
+    if ( rc )
+        return rc;
+
+    rc = lib_populate_exact_node(
+        ctx,
+        (struct lib_populate_exact_args){
+            .domid = ctx->domid,
+            .gpfn = 0,
+            .nr_extents = 1,
+            .order = 0,
+            .node = ctx->node,
+            .reason = "populate one exact-node extent to consume node claim",
+        });
+    if ( rc )
+        return rc;
+
+    /* Update the claim with ctx->alloc_pages */
+    rc = lib_claim_memory(ctx, ctx->domid, 1, /* one claim */
+                          &(memory_claim_t){
+                              .pages = ctx->alloc_pages,
+                              .node = ctx->node,
+                          },
+                          "replace node claim with a new absolute target");
+    if ( rc )
+        return rc;
+
+    return lib_release_all_claims(ctx, ctx->domid);
+}
+
+/*
+ * CM003: legacy xc_domain_claim_pages() global claim is tracked in outstanding
+ * pages and released when the domain is destroyed.
+ */
+static int run_legacy_global_claim(struct test_ctx *ctx)
+{
+    uint64_t pre_claim_outstanding;
+    unsigned long free_pages, claim_pages;
+    int rc;
+
+    /* Get the global free memory for sizing the claim */
+    lib_get_global_free_pages(ctx->env, &free_pages);
+
+    ctx->alloc_pages = lib_default_alloc_pages(free_pages);
+    claim_pages = ctx->alloc_pages;
+    snprintf(ctx->result->params, sizeof(ctx->result->params),
+             "claim_pages=%lu free_pages=%lu", claim_pages, free_pages);
+
+    rc = lib_get_baseline_outstanding(ctx, &pre_claim_outstanding);
+    if ( rc )
+        return rc;
+
+    rc = lib_claim_pages_legacy(ctx, ctx->domid, claim_pages,
+                                "set legacy global claim");
+    if ( rc )
+        return rc;
+
+    return lib_check_claim(ctx, pre_claim_outstanding, claim_pages,
+                           "check legacy claim in outstanding pages");
+    /* Domain teardown releases the claim; fixture verifies baseline is
+     * restored. */
+}
+
+/*
+ * CM004: Test blocking allocation with claims and claim movement between nodes.
+ *
+ * Claims all free pages on the primary node, verifies allocation is blocked,
+ * then moves the claim to the secondary node and verifies the source node
+ * is freed while the destination node is now blocked.
+ *
+ * Requires at least two online NUMA nodes.
+ */
+static int run_move_claim_between_nodes(struct test_ctx *ctx)
+{
+    unsigned long free_pages_a, total_pages_a, free_pg_b, total_pg_b;
+    memory_claim_t claim;
+    int rc;
+
+    if ( !ctx->env->have_secondary_node )
+        return lib_skip_test(ctx, "requires at least two online NUMA nodes");
+
+    ctx->node = ctx->env->primary_node;
+    ctx->other_node = ctx->env->secondary_node;
+
+    rc = lib_create_domain(ctx, &ctx->helper_domid, "helper");
+    if ( rc )
+        return rc;
+
+    lib_get_node_free_pages(ctx->env, ctx->node, &free_pages_a, &total_pages_a);
+    lib_get_node_free_pages(ctx->env, ctx->other_node, &free_pg_b, &total_pg_b);
+
+    /* Set*/
+    ctx->alloc_pages = lib_default_alloc_pages(
+        free_pages_a < free_pg_b ? free_pages_a : free_pg_b);
+
+    snprintf(ctx->result->params, sizeof(ctx->result->params),
+             "from=%u to=%u claim_from=%lu claim_to=%lu probe_order=0",
+             ctx->node, ctx->other_node, free_pages_a, free_pg_b);
+
+    claim = (memory_claim_t){
+        .pages = free_pages_a,
+        .node = ctx->node,
+    };
+    rc = lib_claim_memory(ctx, ctx->domid, 1, &claim,
+                          "claim all currently free pages on the source node");
+    if ( rc )
+        return rc;
+
+    rc = lib_expect_populate_exact_failure(
+        ctx,
+        (struct lib_populate_exact_args){
+            .domid = ctx->helper_domid,
+            .gpfn = 0,
+            .nr_extents = 1,
+            .order = 0,
+            .node = ctx->node,
+            .reason = "check source node allocation is blocked by the claim",
+        });
+    if ( rc )
+        return rc;
+
+    claim = (memory_claim_t){
+        .pages = free_pg_b,
+        .node = ctx->other_node,
+    };
+    rc = lib_claim_memory(ctx, ctx->domid, 1, &claim,
+                          "move the claim to the destination node");
+    if ( rc )
+        return rc;
+
+    rc = lib_populate_exact_node(
+        ctx,
+        (struct lib_populate_exact_args){
+            .domid = ctx->helper_domid,
+            .gpfn = 0,
+            .nr_extents = 1,
+            .order = 0,
+            .node = ctx->node,
+            .reason =
+                "check source node allocation succeeds after claim moved away",
+        });
+    if ( rc )
+        return rc;
+
+    rc = lib_expect_populate_exact_failure(
+        ctx, (struct lib_populate_exact_args){
+                 .domid = ctx->helper_domid,
+                 .gpfn = 1,
+                 .nr_extents = 1,
+                 .order = 0,
+                 .node = ctx->other_node,
+                 .reason = "check destination node allocation is now blocked",
+             });
+    if ( rc )
+        return rc;
+
+    return lib_release_all_claims(ctx, ctx->domid);
+}
+
+/*
+ * CM005 - CM012: invalid claims are rejected with appropriate error codes.
+ *
+ * Tests various invalid claim parameters (non-present node, too many claims,
+ * node id above UINT8_MAX, pages above INT32_MAX, non-zero pad, zero claim
+ * count, null claims pointer with non-zero count, and non-null claims pointer
+ * with zero count) and verify they are rejected with the expected error code.
+ */
+static int run_reject_non_present_node(struct test_ctx *ctx)
+{
+    memory_claim_t claim = {
+        .pages = 1,
+        .node = ctx->env->num_nodes,
+    };
+
+    ctx->node = ctx->env->primary_node;
+    snprintf(ctx->result->params, sizeof(ctx->result->params),
+             "node=%u num_nodes=%u", claim.node, ctx->env->num_nodes);
+
+    return lib_expect_claim_memory_failure(
+        ctx, ctx->domid, 1, &claim, ENOENT,
+        "reject claim on a non-present NUMA node");
+}
+
+static int run_reject_too_many_claims(struct test_ctx *ctx)
+{
+    memory_claim_t claims[XEN_DOMCTL_CLAIM_MEMORY_MAX_CLAIMS + 1] = {0};
+    const uint32_t nr_claims = XEN_DOMCTL_CLAIM_MEMORY_MAX_CLAIMS + 1;
+
+    ctx->node = ctx->env->primary_node;
+    for ( uint32_t i = 0; i < nr_claims; i++ )
+        claims[i] = (memory_claim_t){
+            .pages = 1,
+            .node = ctx->env->primary_node,
+        };
+
+    snprintf(ctx->result->params, sizeof(ctx->result->params),
+             "nr_claims=%u max_claims=%u", nr_claims,
+             XEN_DOMCTL_CLAIM_MEMORY_MAX_CLAIMS);
+
+    return lib_expect_claim_memory_failure(
+        ctx, ctx->domid, nr_claims, claims, E2BIG,
+        "reject claim list larger than the supported maximum");
+}
+
+static int run_reject_node_gt_uint8_max(struct test_ctx *ctx)
+{
+    memory_claim_t claim = {
+        .pages = 1,
+        .node = UINT8_MAX + 1U,
+    };
+
+    ctx->node = ctx->env->primary_node;
+    snprintf(ctx->result->params, sizeof(ctx->result->params), "node=%u",
+             claim.node);
+
+    return lib_expect_claim_memory_failure(
+        ctx, ctx->domid, 1, &claim, ENOENT,
+        "reject claim with node id above UINT8_MAX");
+}
+
+static int run_reject_pages_gt_int32_max(struct test_ctx *ctx)
+{
+    memory_claim_t claim = {
+        .pages = INT32_MAX + 1UL,
+        .node = ctx->env->primary_node,
+    };
+
+    ctx->node = ctx->env->primary_node;
+    snprintf(ctx->result->params, sizeof(ctx->result->params),
+             "pages=%lu node=%u", (unsigned long)claim.pages, claim.node);
+
+    return lib_expect_claim_memory_failure(
+        ctx, ctx->domid, 1, &claim, ENOMEM,
+        "reject claim with pages larger than INT32_MAX");
+}
+
+static int run_reject_nonzero_pad(struct test_ctx *ctx)
+{
+    memory_claim_t claim = {
+        .pages = 1,
+        .node = ctx->env->primary_node,
+        .pad = 1,
+    };
+
+    ctx->node = ctx->env->primary_node;
+    snprintf(ctx->result->params, sizeof(ctx->result->params), "node=%u pad=%u",
+             claim.node, claim.pad);
+
+    return lib_expect_claim_memory_failure(
+        ctx, ctx->domid, 1, &claim, EINVAL,
+        "reject claim with non-zero padding");
+}
+
+static int run_reject_zero_claim_count(struct test_ctx *ctx)
+{
+    snprintf(ctx->result->params, sizeof(ctx->result->params), "nr_claims=0");
+
+    return lib_expect_claim_memory_failure(
+        ctx, ctx->domid, 0, NULL, EINVAL,
+        "reject xc_domain_claim_memory() with nr_claims == 0");
+}
+
+static int run_reject_null_claims_with_nonzero_count(struct test_ctx *ctx)
+{
+    snprintf(ctx->result->params, sizeof(ctx->result->params),
+             "nr_claims=1 claims=NULL");
+
+    return lib_expect_claim_memory_failure(
+        ctx, ctx->domid, 1, NULL, EFAULT,
+        "reject xc_domain_claim_memory() with claims=NULL and nr_claims == 1");
+}
+
+static int run_reject_zero_count_with_valid_pointer(struct test_ctx *ctx)
+{
+    memory_claim_t claim = {
+        .pages = 1,
+        .node = ctx->env->primary_node,
+    };
+
+    snprintf(ctx->result->params, sizeof(ctx->result->params),
+             "nr_claims=0 claims=valid node=%u", claim.node);
+
+    return lib_expect_claim_memory_failure(
+        ctx, ctx->domid, 0, &claim, EINVAL,
+        "reject xc_domain_claim_memory() with !nr_claims but a claims pointer");
+}
+
+/* List of all test cases.  The fixture iterates over this list to run tests. */
+static const struct test_case test_cases[] = {
+    {
+        .id = "CM000",
+        .name = "basic_node_claim",
+        .run = run_basic_node_claim,
+    },
+    {
+        .id = "CM001",
+        .name = "global_replace_after_alloc",
+        .run = run_global_replace_after_alloc,
+    },
+    {
+        .id = "CM002",
+        .name = "node_replace_after_alloc",
+        .run = run_node_replace_after_alloc,
+    },
+    {
+        .id = "CM003",
+        .name = "legacy_global_claim",
+        .run = run_legacy_global_claim,
+    },
+    {
+        .id = "CM004",
+        .name = "move_claim_between_nodes",
+        .run = run_move_claim_between_nodes,
+    },
+    {
+        .id = "CM005",
+        .name = "reject_non_present_node",
+        .run = run_reject_non_present_node,
+    },
+    {
+        .id = "CM006",
+        .name = "reject_too_many_claims",
+        .run = run_reject_too_many_claims,
+    },
+    {
+        .id = "CM007",
+        .name = "reject_node_gt_uint8_max",
+        .run = run_reject_node_gt_uint8_max,
+    },
+    {
+        .id = "CM008",
+        .name = "reject_pages_gt_int32_max",
+        .run = run_reject_pages_gt_int32_max,
+    },
+    {
+        .id = "CM009",
+        .name = "reject_nonzero_pad",
+        .run = run_reject_nonzero_pad,
+    },
+    {
+        .id = "CM010",
+        .name = "reject_zero_claim_count",
+        .run = run_reject_zero_claim_count,
+    },
+    {
+        .id = "CM011",
+        .name = "reject_null_claims_with_nonzero_count",
+        .run = run_reject_null_claims_with_nonzero_count,
+    },
+    {
+        .id = "CM012",
+        .name = "reject_zero_count_with_valid_pointer",
+        .run = run_reject_zero_count_with_valid_pointer,
+    },
+};
+
+static void usage(FILE *stream, const char *prog)
+{
+    fprintf(stream,
+            "Usage: %s [OPTIONS]\n\n"
+            "Dedicated xc_domain_claim_memory() tests.\n\n"
+            "Options:\n"
+            "  -l, --list         List available test IDs and exit\n"
+            "  -t, --test ID      Run only the specified test ID (repeatable)\n"
+            "  -v, --verbose      Print per-step progress\n"
+            "  -h, --help         Show this help text\n",
+            prog);
+}
+
+static bool test_is_selected(const struct runtime_config *cfg,
+                             const struct test_case *test)
+{
+    if ( !cfg->nr_selected_ids )
+        return true;
+
+    for ( size_t i = 0; i < cfg->nr_selected_ids; i++ )
+        if ( !strcmp(cfg->selected_ids[i], test->id) )
+            return true;
+    return false;
+}
+
+static const char *status_name(enum test_status status)
+{
+    switch ( status )
+    {
+    case TEST_PASSED:
+        return "PASSED";
+    case TEST_FAILED:
+        return "FAILED";
+    case TEST_SKIPPED:
+        return "SKIPPED";
+    }
+    return "UNKNOWN";
+}
+
+static void print_test_list(void)
+{
+    puts("Available tests:");
+    for ( size_t i = 0; i < ARRAY_SIZE(test_cases); i++ )
+        printf("  %s  %s\n", test_cases[i].id, test_cases[i].name);
+}
+
+int main(int argc, char **argv)
+{
+    struct runtime_config cfg = {0};
+    struct test_env env = {0};
+    struct test_result results[ARRAY_SIZE(test_cases)] = {0};
+    unsigned int passed = 0, failed = 0, skipped = 0;
+    int opt;
+
+    while ( (opt = getopt_long(argc, argv, "hlt:v", long_options, NULL)) != -1 )
+    {
+        switch ( opt )
+        {
+        case 'h':
+            usage(stdout, argv[0]);
+            return 0;
+
+        case 'l':
+            cfg.list_only = true;
+            break;
+
+        case 't':
+            if ( cfg.nr_selected_ids >= ARRAY_SIZE(cfg.selected_ids) )
+                errx(1, "too many --test selectors (max %zu)",
+                     ARRAY_SIZE(cfg.selected_ids));
+            cfg.selected_ids[cfg.nr_selected_ids++] = optarg;
+            break;
+
+        case 'v':
+            cfg.verbose = true;
+            break;
+
+        default:
+            usage(stderr, argv[0]);
+            return 1;
+        }
+    }
+
+    if ( cfg.list_only )
+    {
+        print_test_list();
+        return 0;
+    }
+
+    printf("=========== xc_domain_claim_memory semantics =============\n");
+    printf("alloc_pages=half-free selected=%zu\n", cfg.nr_selected_ids);
+
+    lib_initialise_test_env(&env);
+
+    for ( size_t i = 0; i < ARRAY_SIZE(test_cases); i++ )
+    {
+        if ( !test_is_selected(&cfg, &test_cases[i]) )
+            continue;
+
+        lib_run_one_test(&env, &cfg, &test_cases[i], &results[i]);
+
+        printf("%s::%s[%s] %s (%.2f ms)\n", argv[0], results[i].test->id,
+               results[i].params[0] ? results[i].params : "default",
+               status_name(results[i].status), results[i].duration_ms);
+
+        if ( results[i].status == TEST_FAILED )
+            printf("    %s\n", results[i].details);
+        else if ( results[i].status == TEST_SKIPPED )
+            printf("    %s\n", results[i].details);
+    }
+
+    puts("============== short test summary info ===============");
+    for ( size_t i = 0; i < ARRAY_SIZE(test_cases); i++ )
+    {
+        if ( !results[i].test )
+            continue;
+
+        printf("%s %s %s\n", status_name(results[i].status),
+               results[i].test->id, results[i].test->name);
+
+        switch ( results[i].status )
+        {
+        case TEST_PASSED:
+            passed++;
+            break;
+        case TEST_FAILED:
+            failed++;
+            printf("    %s\n", results[i].details);
+            break;
+        case TEST_SKIPPED:
+            skipped++;
+            printf("    %s\n", results[i].details);
+            break;
+        }
+    }
+
+    printf("============ %u passed, %u failed, %u skipped ================\n",
+           passed, failed, skipped);
+
+    lib_release_test_env(&env);
+    return failed ? 1 : 0;
+}
+
+/*
+ * Local variables:
+ * mode: C
+ * c-file-style: "BSD"
+ * c-basic-offset: 4
+ * tab-width: 4
+ * indent-tabs-mode: nil
+ * End:
+ */
