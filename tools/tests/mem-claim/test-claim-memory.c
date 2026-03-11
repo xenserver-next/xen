@@ -565,25 +565,27 @@ static int run_zero_claim_memory_resets_outstanding(struct test_ctx *ctx)
 static int run_offline_memory_with_claims(struct test_ctx *ctx)
 {
     xc_physinfo_t physinfo;
-    unsigned long free_pages, offline_pages = 1UL;
+    unsigned long free_pages, offline_pages = 10UL, spare_pages = 9UL;
     int debug_rc;
 
     /* Get the global free memory for sizing the claim */
-    lib_get_global_free_pages(ctx->env, &ctx->alloc_pages);
+    lib_get_global_free_pages(ctx->env, &free_pages);
+
+    ctx->alloc_pages = free_pages - spare_pages;
     snprintf(ctx->result->params, sizeof(ctx->result->params),
-             "claim_pages = global_free = %lu", ctx->alloc_pages);
+             "claim_pages = %lu free = %lu", ctx->alloc_pages, free_pages);
 
     debug_rc = xc_physinfo(ctx->env->xch, &physinfo);
     if ( !debug_rc )
         lib_debugf(ctx,
                    "CM016 before claim global_free=%lu outstanding=%" PRIu64,
-                   ctx->alloc_pages, physinfo.outstanding_pages);
+                   free_pages, physinfo.outstanding_pages);
 
     rc = lib_claim_memory(
         ctx, ctx->domid, 1,
         &(memory_claim_t){.pages = ctx->alloc_pages,
                           .node = XEN_DOMCTL_CLAIM_MEMORY_GLOBAL},
-        "make a global claim");
+        "make a global claim for all but a few spare pages");
     if ( rc )
         return rc;
 

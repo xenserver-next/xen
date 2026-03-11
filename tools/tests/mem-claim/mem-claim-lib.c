@@ -430,6 +430,7 @@ int lib_offline_memory(struct test_ctx *ctx, uint32_t domid,
     unsigned long unexpected_statuses = 0;
     unsigned long verification_failures = 0;
     int nr_entries;
+    uint64_t mfn = 0;
 
     lib_set_step(ctx, "%s", reason);
 
@@ -449,8 +450,7 @@ int lib_offline_memory(struct test_ctx *ctx, uint32_t domid,
     for ( int i = nr_entries - 1; i >= 0 && offlined < nr_pages; i-- )
     {
         uint64_t start, end;
-        uint64_t mfn;
-        uint64_t backoff = 1;
+        uint64_t backoff = 4096; /* back off on failure, start at 2MiB */
 
         if ( map[i].type != LIB_E820_RAM || !map[i].size )
             continue;
@@ -469,7 +469,7 @@ int lib_offline_memory(struct test_ctx *ctx, uint32_t domid,
         if ( end <= start )
             continue;
 
-        mfn = end - 1;
+        mfn = end - backoff;
         while ( mfn >= start && offlined < nr_pages )
         {
             uint32_t status;
@@ -585,7 +585,7 @@ next_backoff:
                unexpected_statuses);
 
     if ( offlined == nr_pages )
-        return 0;
+        return mfn;
 
     errno = ENOMEM;
     return lib_fail_with_errno(
