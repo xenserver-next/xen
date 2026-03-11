@@ -460,6 +460,38 @@ static int run_reject_zero_count_with_valid_pointer(struct test_ctx *ctx)
         "reject xc_domain_claim_memory() with !nr_claims but a claims pointer");
 }
 
+/*
+ * CM013: legacy xc_domain_claim_pages() with pages > free pages fails with ENOMEM.
+ *
+ * Sets a legacy claim with a page count larger than the global free page count and
+ * verifies it fails with ENOMEM.
+ * Requires at least 2 free pages globally (to distinguish ENOMEM from EINVAL).
+ */
+static int run_legacy_claim_pages_gt_free(struct test_ctx *ctx)
+{
+    unsigned long free_pages;
+    int rc;
+
+    /* Get the global free memory for sizing the claim */
+    lib_get_global_free_pages(ctx->env, &free_pages);
+    if ( free_pages < 2 )
+        return lib_skip_test(ctx, "need at least 2 free pages globally, got %lu",
+                             free_pages);
+
+    ctx->alloc_pages = free_pages + 1;
+
+    snprintf(ctx->result->params, sizeof(ctx->result->params),
+             "claim_pages=%lu global_free=%lu", ctx->alloc_pages, free_pages);
+
+    rc = lib_expect_claim_memory_failure(
+        ctx, ctx->domid, 1,
+        &(memory_claim_t){.pages = ctx->alloc_pages,
+                          .node = XEN_DOMCTL_CLAIM_MEMORY_GLOBAL},
+        ENOMEM, "reject legacy claim with pages > global free pages");
+
+    return rc;
+}
+
 /* List of all test cases.  The fixture iterates over this list to run tests. */
 static const struct test_case test_cases[] = {
     {
@@ -526,6 +558,11 @@ static const struct test_case test_cases[] = {
         .id = "CM012",
         .name = "reject_zero_count_with_valid_pointer",
         .run = run_reject_zero_count_with_valid_pointer,
+    },
+    {
+        .id = "CM013",
+        .name = "legacy_claim_pages_gt_free",
+        .run = run_legacy_claim_pages_gt_free,
     },
 };
 
