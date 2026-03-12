@@ -492,7 +492,12 @@ static int run_legacy_claim_pages_gt_free(struct test_ctx *ctx)
     return rc;
 }
 
-/* List of all test cases.  The fixture iterates over this list to run tests. */
+/*
+ * List of test cases.  The fixture iterates over this list to run tests.
+ *
+ * Tests are identified by their id (e.g. "CM000") and have a descriptive name
+ * and a function pointer to the test implementation.
+ */
 static const struct test_case test_cases[] = {
     {
         .id = "CM000",
@@ -579,39 +584,6 @@ static void usage(FILE *stream, const char *prog)
             prog);
 }
 
-static bool test_is_selected(const struct runtime_config *cfg,
-                             const struct test_case *test)
-{
-    if ( !cfg->nr_selected_ids )
-        return true;
-
-    for ( size_t i = 0; i < cfg->nr_selected_ids; i++ )
-        if ( !strcmp(cfg->selected_ids[i], test->id) )
-            return true;
-    return false;
-}
-
-static const char *status_name(enum test_status status)
-{
-    switch ( status )
-    {
-    case TEST_PASSED:
-        return "PASSED";
-    case TEST_FAILED:
-        return "FAILED";
-    case TEST_SKIPPED:
-        return "SKIPPED";
-    }
-    return "UNKNOWN";
-}
-
-static void print_test_list(void)
-{
-    puts("Available tests:");
-    for ( size_t i = 0; i < ARRAY_SIZE(test_cases); i++ )
-        printf("  %s  %s\n", test_cases[i].id, test_cases[i].name);
-}
-
 int main(int argc, char **argv)
 {
     struct runtime_config cfg = {0};
@@ -651,12 +623,14 @@ int main(int argc, char **argv)
 
     if ( cfg.list_only )
     {
-        print_test_list();
+        puts("Available tests:");
+        for ( size_t i = 0; i < ARRAY_SIZE(test_cases); i++ )
+            printf("  %s  %s\n", test_cases[i].id, test_cases[i].name);
         return 0;
     }
 
-    printf("=========== xc_domain_claim_memory semantics =============\n");
-    printf("alloc_pages=half-free selected=%zu\n", cfg.nr_selected_ids);
+    printf("========= testcase program: test-claim-memory ==========\n");
+    printf("selected=%zu\n", cfg.nr_selected_ids);
 
     lib_initialise_test_env(&env);
 
@@ -677,7 +651,7 @@ int main(int argc, char **argv)
             printf("    %s\n", results[i].details);
     }
 
-    puts("============== short test summary info ===============");
+    puts("================== short test summary info =================");
     for ( size_t i = 0; i < ARRAY_SIZE(test_cases); i++ )
     {
         if ( !results[i].test )
@@ -702,7 +676,7 @@ int main(int argc, char **argv)
         }
     }
 
-    printf("============ %u passed, %u failed, %u skipped ================\n",
+    printf("============ %u passed, %u failed, %u skipped ============\n",
            passed, failed, skipped);
 
     lib_release_test_env(&env);

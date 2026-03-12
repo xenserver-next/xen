@@ -141,6 +141,32 @@ int lib_initialise_test_env(struct test_env *env);
 void lib_release_test_env(struct test_env *env);
 unsigned long lib_default_alloc_pages(unsigned long free_pages);
 
+static inline const char *status_name(enum test_status status)
+{
+    switch ( status )
+    {
+    case TEST_PASSED:
+        return "PASSED";
+    case TEST_FAILED:
+        return "FAILED";
+    case TEST_SKIPPED:
+        return "SKIPPED";
+    }
+    return "UNKNOWN";
+}
+
+static inline bool test_is_selected(const struct runtime_config *cfg,
+                             const struct test_case *test)
+{
+    if ( !cfg->nr_selected_ids )
+        return true;
+
+    for ( size_t i = 0; i < cfg->nr_selected_ids; i++ )
+        if ( !strcmp(cfg->selected_ids[i], test->id) )
+            return true;
+    return false;
+}
+
 #endif /* MEM_CLAIM_LIB_H */
 
 /*
