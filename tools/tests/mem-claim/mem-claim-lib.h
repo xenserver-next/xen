@@ -90,6 +90,8 @@ struct test_case
 /* --- diagnostics helpers --- */
 void lib_appendf(char *buf, size_t size, const char *fmt, ...)
     __attribute__((format(printf, 3, 4)));
+void lib_debugf(struct test_ctx *ctx, const char *fmt, ...)
+    __attribute__((format(printf, 2, 3)));
 void lib_set_step(struct test_ctx *ctx, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
 int lib_fail_with_errno(struct test_ctx *ctx, int errnum, const char *fmt, ...)

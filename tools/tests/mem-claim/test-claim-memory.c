@@ -16,6 +16,7 @@
 #include <getopt.h>
 #include <limits.h>
 #include <stdio.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -563,12 +564,20 @@ static int run_zero_claim_memory_resets_outstanding(struct test_ctx *ctx)
  */
 static int run_offline_memory_with_claims(struct test_ctx *ctx)
 {
-    unsigned long free_pages;
+    xc_physinfo_t physinfo;
+    unsigned long free_pages, offline_pages = 10;
+    int debug_rc;
 
     /* Get the global free memory for sizing the claim */
     lib_get_global_free_pages(ctx->env, &ctx->alloc_pages);
     snprintf(ctx->result->params, sizeof(ctx->result->params),
              "claim_pages = global_free = %lu", ctx->alloc_pages);
+
+    debug_rc = xc_physinfo(ctx->env->xch, &physinfo);
+    if ( !debug_rc )
+        lib_debugf(ctx,
+                   "CM016 before claim global_free=%lu outstanding=%" PRIu64,
+                   ctx->alloc_pages, physinfo.outstanding_pages);
 
     rc = lib_claim_memory(
         ctx, ctx->domid, 1,
@@ -578,7 +587,13 @@ static int run_offline_memory_with_claims(struct test_ctx *ctx)
     if ( rc )
         return rc;
 
-    rc = lib_offline_memory(ctx, ctx->domid, 1UL,
+    debug_rc = lib_get_global_free_pages(ctx->env, &free_pages);
+    if ( !debug_rc && !xc_physinfo(ctx->env->xch, &physinfo) )
+        lib_debugf(ctx,
+                   "CM016 after claim global_free=%lu outstanding=%" PRIu64,
+                   free_pages, physinfo.outstanding_pages);
+
+    rc = lib_offline_memory(ctx, ctx->domid, offline_pages,
                             "offline memory to reduce free pages below claim");
     if ( rc )
         return rc;
@@ -588,14 +603,22 @@ static int run_offline_memory_with_claims(struct test_ctx *ctx)
      * claim count is also reduced to reflect the new effective claim.
      */
     lib_get_global_free_pages(ctx->env, &free_pages);
-    if ( free_pages != ctx->alloc_pages - 1UL )
+    if ( !xc_physinfo(ctx->env->xch, &physinfo) )
+        lib_debugf(ctx,
+                   "CM016 after offlining global_free=%lu outstanding=%" PRIu64
+                   " expected_free=%lu",
+                   free_pages, physinfo.outstanding_pages,
+                   ctx->alloc_pages - offline_pages);
+
+    if ( free_pages != ctx->alloc_pages - offline_pages )
         return lib_fail(ctx,
-                        "expected free pages to be %lu (reduced by 1) after "
+                        "expected free pages to be %lu (reduced by %lu) after "
                         "offlining memory (when all is outstanding), got %lu",
-                        ctx->alloc_pages - 1UL, free_pages);
+                        ctx->alloc_pages - offline_pages, offline_pages,
+                        free_pages);
 
     return lib_check_claim(
-        ctx, ctx->alloc_pages - 1UL, 0,
+        ctx, ctx->alloc_pages - offline_pages, 0,
         "check outstanding claim count after offlining memory");
 }
 

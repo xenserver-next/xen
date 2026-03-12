@@ -21,6 +21,7 @@ static int rc;
 
 /* --- diagnostics helpers --- */
 
+/* Append formatted text to a buffer, ensuring it is always null-terminated. */
 void lib_appendf(char *buf, size_t size, const char *fmt, ...)
 {
     va_list ap;
@@ -32,6 +33,22 @@ void lib_appendf(char *buf, size_t size, const char *fmt, ...)
     va_start(ap, fmt);
     vsnprintf(buf + used, size - used, fmt, ap);
     va_end(ap);
+}
+
+void lib_debugf(struct test_ctx *ctx, const char *fmt, ...)
+{
+    va_list ap;
+
+    if ( !ctx->cfg->verbose )
+        return;
+
+    fputs("      debug: ", stdout);
+
+    va_start(ap, fmt);
+    vprintf(fmt, ap);
+    va_end(ap);
+
+    fputc('\n', stdout);
 }
 
 void lib_set_step(struct test_ctx *ctx, const char *fmt, ...)
@@ -403,13 +420,25 @@ int lib_offline_memory(struct test_ctx *ctx, uint32_t domid,
                        unsigned long nr_pages, const char *reason)
 {
     struct e820entry map[E820MAX];
+    xc_physinfo_t physinfo;
+    unsigned long free_before = 0, free_after = 0;
     unsigned long offlined = 0;
+    unsigned long attempted = 0;
+    unsigned long mark_failures = 0;
+    unsigned long unexpected_statuses = 0;
     int nr_entries;
 
     lib_set_step(ctx, "%s", reason);
 
     if ( !nr_pages )
         return 0;
+
+    if ( !lib_get_global_free_pages(ctx->env, &free_before) &&
+         !xc_physinfo(ctx->env->xch, &physinfo) )
+        lib_debugf(
+            ctx,
+            "before offlining domid=%u global_free=%lu outstanding=%" PRIu64,
+            domid, free_before, physinfo.outstanding_pages);
 
     nr_entries = xc_get_machine_memory_map(ctx->env->xch, map, E820MAX);
     if ( nr_entries < 0 )
@@ -424,21 +453,41 @@ int lib_offline_memory(struct test_ctx *ctx, uint32_t domid,
 
         start = map[i].addr >> XC_PAGE_SHIFT;
         end = (map[i].addr + map[i].size) >> XC_PAGE_SHIFT;
+        lib_debugf(ctx,
+                   "e820 RAM entry %d start=%" PRIu64 " end=%" PRIu64
+                   " pages=%" PRIu64,
+                   i, start, end, end - start);
+        lib_appendf(ctx->result->details, sizeof(ctx->result->details),
+                    "\n    Found e820 entry %d: start=%" PRIu64 " end=%" PRIu64
+                    " (%" PRIu64 " pages)",
+                    i, start, end, end - start);
 
         for ( uint64_t mfn = start; mfn < end && offlined < nr_pages; mfn++ )
         {
             uint32_t status;
 
+            attempted++;
             errno = 0;
             rc = xc_mark_page_offline(ctx->env->xch, mfn, mfn, &status);
             if ( rc < 0 )
+            {
+                mark_failures++;
                 continue;
+            }
 
             if ( (status & PG_OFFLINE_STATUS_MASK) == PG_OFFLINE_OFFLINED )
             {
+                lib_debugf(ctx, "offlined mfn=%" PRIu64 " (%lu/%lu)", mfn,
+                           offlined + 1, nr_pages);
+                lib_appendf(ctx->result->details, sizeof(ctx->result->details),
+                            "\n    offlined page %" PRIu64, mfn);
                 offlined++;
                 continue;
             }
+
+            unexpected_statuses++;
+            lib_debugf(ctx, "mfn=%" PRIu64 " returned offline status=0x%x", mfn,
+                       status);
 
             /* Revert unexpected states to avoid affecting later tests. */
             rc = xc_mark_page_online(ctx->env->xch, mfn, mfn, &status);
@@ -449,6 +498,21 @@ int lib_offline_memory(struct test_ctx *ctx, uint32_t domid,
                             mfn, status, errno, strerror(errno));
         }
     }
+
+    if ( !lib_get_global_free_pages(ctx->env, &free_after) &&
+         !xc_physinfo(ctx->env->xch, &physinfo) )
+        lib_debugf(ctx,
+                   "after offlining domid=%u attempted=%lu offlined=%lu"
+                   " mark_failures=%lu unexpected_statuses=%lu global_free=%lu"
+                   " outstanding=%" PRIu64,
+                   domid, attempted, offlined, mark_failures,
+                   unexpected_statuses, free_after, physinfo.outstanding_pages);
+    else
+        lib_debugf(ctx,
+                   "after offlining domid=%u attempted=%lu offlined=%lu"
+                   " mark_failures=%lu unexpected_statuses=%lu",
+                   domid, attempted, offlined, mark_failures,
+                   unexpected_statuses);
 
     if ( offlined == nr_pages )
         return 0;
