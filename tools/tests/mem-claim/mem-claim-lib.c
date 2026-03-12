@@ -430,7 +430,7 @@ int lib_offline_memory(struct test_ctx *ctx, uint32_t domid,
     unsigned long unexpected_statuses = 0;
     unsigned long verification_failures = 0;
     int nr_entries;
-    uint64_t mfn = 0;
+    uint64_t mfn = 0, initial_backoff = 3072; /* initial back off on failure */
 
     lib_set_step(ctx, "%s", reason);
 
@@ -450,7 +450,7 @@ int lib_offline_memory(struct test_ctx *ctx, uint32_t domid,
     for ( int i = nr_entries - 1; i >= 0 && offlined < nr_pages; i-- )
     {
         uint64_t start, end;
-        uint64_t backoff = 4096; /* back off on failure, start at 2MiB */
+        uint64_t backoff = initial_backoff;
 
         if ( map[i].type != LIB_E820_RAM || !map[i].size )
             continue;
@@ -553,6 +553,7 @@ int lib_offline_memory(struct test_ctx *ctx, uint32_t domid,
                        " query_status=0x%x backoff=%" PRIu64,
                        current_mfn, status, verify_status, backoff);
 
+#ifdef TRIGGER_PAGE_ONLINE_RACE
             /* Revert unexpected states to avoid affecting later tests. */
             rc = xc_mark_page_online(ctx->env->xch, current_mfn, current_mfn,
                                      &verify_status);
@@ -561,7 +562,7 @@ int lib_offline_memory(struct test_ctx *ctx, uint32_t domid,
                             "\n    warning: failed to online page %" PRIu64
                             " after unexpected offline status 0x%x: %d (%s)",
                             current_mfn, verify_status, errno, strerror(errno));
-
+#endif
 next_backoff:
             if ( current_mfn <= start )
                 break;
@@ -570,7 +571,11 @@ next_backoff:
                 backoff <<= 1;
 
             if ( current_mfn - start < backoff )
-                mfn = start;
+            {
+                /* reduce initial backoff if we're close to the start */
+                initial_backoff /= 2;
+                mfn = end - initial_backoff;
+            }
             else
                 mfn = current_mfn - backoff;
         }
