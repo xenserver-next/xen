@@ -126,7 +126,7 @@ static int run_global_replace_after_alloc(struct test_ctx *ctx)
                           &(memory_claim_t){
                               .pages = ctx->alloc_pages,
                               .node = XEN_DOMCTL_CLAIM_MEMORY_GLOBAL,
-                           },
+                          },
                           "replace global claim with a new absolute target");
     if ( rc )
         return rc;
@@ -461,11 +461,8 @@ static int run_reject_zero_count_with_valid_pointer(struct test_ctx *ctx)
 }
 
 /*
- * CM013: legacy xc_domain_claim_pages() with pages > free pages fails with ENOMEM.
- *
- * Sets a legacy claim with a page count larger than the global free page count and
- * verifies it fails with ENOMEM.
- * Requires at least 2 free pages globally (to distinguish ENOMEM from EINVAL).
+ * CM013: Check both xc_domain_claim_pages() and xc_domain_claim_memory()
+ * with pages > free pages fail with ENOMEM.
  */
 static int run_legacy_claim_pages_gt_free(struct test_ctx *ctx)
 {
@@ -475,22 +472,90 @@ static int run_legacy_claim_pages_gt_free(struct test_ctx *ctx)
     /* Get the global free memory for sizing the claim */
     lib_get_global_free_pages(ctx->env, &free_pages);
     if ( free_pages < 2 )
-        return lib_skip_test(ctx, "need at least 2 free pages globally, got %lu",
-                             free_pages);
+        return lib_skip_test(
+            ctx, "need at least 2 free pages globally, got %lu", free_pages);
 
     ctx->alloc_pages = free_pages + 1;
 
     snprintf(ctx->result->params, sizeof(ctx->result->params),
              "claim_pages=%lu global_free=%lu", ctx->alloc_pages, free_pages);
 
+    rc = lib_claim_pages_legacy(
+        ctx, ctx->domid, ctx->alloc_pages,
+        "reject xc_domain_claim_pages() with pages > global free page");
+    if ( rc )
+        return rc;
+
     rc = lib_expect_claim_memory_failure(
         ctx, ctx->domid, 1,
         &(memory_claim_t){.pages = ctx->alloc_pages,
                           .node = XEN_DOMCTL_CLAIM_MEMORY_GLOBAL},
-        ENOMEM, "reject legacy claim with pages > global free pages");
+        ENOMEM, "reject claim_memory() with pages > global free pages");
 
     return rc;
 }
+
+/*
+ * CM0014: Check that a claim_pages=0 resets the claims to the baseline.
+ */
+static int run_zero_claim_pages_resets_outstanding(struct test_ctx *ctx)
+{
+    uint64_t pre_claim_outstanding;
+    int rc;
+
+    rc = lib_get_baseline_outstanding(ctx, &pre_claim_outstanding);
+    if ( rc )
+        return rc;
+
+    /* Make a claim first to move outstanding away from the baseline. */
+    rc = lib_claim_pages_legacy(ctx, ctx->domid, 8,
+                                "zero claim to reset outstanding to baseline");
+    if ( rc )
+        return rc;
+
+    /* Now set a zero claim to reset outstanding back to the baseline. */
+    rc = lib_claim_pages_legacy(ctx, ctx->domid, 0,
+                                "zero claim to reset outstanding to baseline");
+    if ( rc )
+        return rc;
+
+    return lib_check_claim(ctx, pre_claim_outstanding, 0,
+                           "check zero claim resets outstanding to baseline");
+}
+
+/*
+ * CM0015: Check that a claim_memory=0 resets the claims to the baseline.
+ */
+static int run_zero_claim_memory_resets_outstanding(struct test_ctx *ctx)
+{
+    uint64_t pre_claim_outstanding;
+    int rc;
+
+    rc = lib_get_baseline_outstanding(ctx, &pre_claim_outstanding);
+    if ( rc )
+        return rc;
+
+    /* Make a claim first to move outstanding away from the baseline. */
+    rc = lib_claim_memory(
+        ctx, ctx->domid, 1,
+        &(memory_claim_t){.pages = 8, .node = ctx->env->primary_node},
+        "make a claim to move outstanding away from baseline");
+    if ( rc )
+        return rc;
+
+    /* Now set a zero claim to reset outstanding back to the baseline. */
+    rc = lib_claim_memory(
+        ctx, ctx->domid, 1,
+        &(memory_claim_t){.pages = 0, .node = XEN_DOMCTL_CLAIM_MEMORY_GLOBAL},
+        "set a zero claim to reset outstanding to baseline");
+    if ( rc )
+        return rc;
+
+    return lib_check_claim(ctx, pre_claim_outstanding, 0,
+                           "check zero claim resets outstanding to baseline");
+}
+
+/////
 
 /*
  * List of test cases.  The fixture iterates over this list to run tests.
@@ -568,6 +633,16 @@ static const struct test_case test_cases[] = {
         .id = "CM013",
         .name = "legacy_claim_pages_gt_free",
         .run = run_legacy_claim_pages_gt_free,
+    },
+    {
+        .id = "CM014",
+        .name = "zero_claim_pages_resets_outstanding",
+        .run = run_zero_claim_pages_resets_outstanding,
+    },
+    {
+        .id = "CM015",
+        .name = "zero_claim_memory_resets_outstanding",
+        .run = run_zero_claim_memory_resets_outstanding,
     },
 };
 

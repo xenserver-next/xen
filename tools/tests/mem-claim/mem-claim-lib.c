@@ -16,6 +16,8 @@
 
 #include "mem-claim-lib.h"
 
+static int rc;
+
 /* --- diagnostics helpers --- */
 
 void lib_appendf(char *buf, size_t size, const char *fmt, ...)
@@ -46,7 +48,6 @@ void lib_set_step(struct test_ctx *ctx, const char *fmt, ...)
 static void append_snapshot(struct test_ctx *ctx)
 {
     xc_physinfo_t physinfo;
-    int rc;
     unsigned int nodes[2] = {ctx->node, ctx->other_node};
 
     rc = xc_physinfo(ctx->env->xch, &physinfo);
@@ -169,8 +170,6 @@ int lib_get_node_free_pages(struct test_env *env, unsigned int node,
                             unsigned long *free_pages,
                             unsigned long *total_pages)
 {
-    int rc;
-
     if ( node >= env->num_nodes )
     {
         errno = EINVAL;
@@ -190,7 +189,6 @@ int lib_get_node_free_pages(struct test_env *env, unsigned int node,
 
 int lib_get_global_free_pages(struct test_env *env, unsigned long *free_pages)
 {
-    int rc;
     uint64_t free_bytes;
 
     rc = xc_availheap(env->xch, 0, 0, -1, &free_bytes);
@@ -205,7 +203,6 @@ int lib_get_baseline_outstanding(struct test_ctx *ctx,
                                  uint64_t *baseline_outstanding)
 {
     xc_physinfo_t physinfo;
-    int rc;
 
     lib_set_step(ctx, "query baseline outstanding pages");
     rc = xc_physinfo(ctx->env->xch, &physinfo);
@@ -238,7 +235,6 @@ int lib_check_claim(struct test_ctx *ctx, uint64_t baseline_outstanding,
 int lib_create_domain(struct test_ctx *ctx, uint32_t *domid, const char *label)
 {
     struct xen_domctl_createdomain create = ctx->env->create_template;
-    int rc;
 
     lib_set_step(ctx, "create %s domain", label);
     *domid = DOMID_INVALID;
@@ -262,8 +258,6 @@ int lib_create_domain(struct test_ctx *ctx, uint32_t *domid, const char *label)
 
 int lib_destroy_domain(struct test_ctx *ctx, uint32_t *domid, const char *label)
 {
-    int rc;
-
     if ( *domid == DOMID_INVALID )
         return 0;
 
@@ -291,8 +285,6 @@ int lib_destroy_domain(struct test_ctx *ctx, uint32_t *domid, const char *label)
 int lib_claim_memory(struct test_ctx *ctx, uint32_t domid, uint32_t nr_claims,
                      memory_claim_t *claims, const char *reason)
 {
-    int rc;
-
     lib_set_step(ctx, "%s", reason);
     rc = xc_domain_claim_memory(ctx->env->xch, domid, nr_claims, claims);
     if ( rc )
@@ -307,18 +299,13 @@ int lib_expect_claim_memory_failure(struct test_ctx *ctx, uint32_t domid,
                                     int expected_errno,
                                     const char *reason)
 {
-    int rc, saved_errno;
-
     lib_set_step(ctx, "%s", reason);
-    errno = 0;
     rc = xc_domain_claim_memory(ctx->env->xch, domid, nr_claims, claims);
-    saved_errno = errno;
-
-    if ( rc == -1 && saved_errno == expected_errno )
+    if ( rc == -1 && errno == expected_errno )
         return 0;
 
     return lib_fail_with_errno(
-        ctx, saved_errno,
+        ctx, errno,
         "expected xc_domain_claim_memory() to fail with errno=%d (%s), got rc=%d",
         expected_errno, strerror(expected_errno), rc);
 }
@@ -329,28 +316,39 @@ int lib_release_all_claims(struct test_ctx *ctx, uint32_t domid)
         .pages = 0,
         .node = XEN_DOMCTL_CLAIM_MEMORY_GLOBAL,
     };
-    int rc;
 
     lib_set_step(ctx, "release all claims with global zero claim");
     rc = xc_domain_claim_memory(ctx->env->xch, domid, 1, &claim);
     if ( rc )
         return lib_fail_current(ctx,
                                 "xc_domain_claim_memory(..., global=0) failed");
-
     return 0;
 }
 
 int lib_claim_pages_legacy(struct test_ctx *ctx, uint32_t domid,
                            unsigned long nr_pages, const char *reason)
 {
-    int rc;
-
     lib_set_step(ctx, "%s", reason);
     rc = xc_domain_claim_pages(ctx->env->xch, domid, nr_pages);
     if ( rc )
         return lib_fail_current(ctx, "xc_domain_claim_pages(%lu) failed",
                                 nr_pages);
+    return 0;
+}
 
+int lib_claim_pages_legacy_failure(struct test_ctx *ctx, uint32_t domid,
+                                   unsigned long nr_pages,
+                                   int expected_errno, const char *reason)
+{
+    lib_set_step(ctx, "%s", reason);
+    rc = xc_domain_claim_pages(ctx->env->xch, domid, nr_pages);
+    if ( rc == -1 && errno == expected_errno )
+        return 0;
+
+    return lib_fail_with_errno(
+        ctx, errno,
+        "expected xc_domain_claim_pages() to fail with errno=%d(%s), got rc=%d",
+        expected_errno, strerror(expected_errno), rc);
     return 0;
 }
 
@@ -360,14 +358,12 @@ int lib_populate_any(struct test_ctx *ctx, uint32_t domid, xen_pfn_t gpfn,
                      const char *reason)
 {
     xen_pfn_t pfns[] = {gpfn};
-    int rc;
 
     lib_set_step(ctx, "%s", reason);
     rc = xc_domain_populate_physmap_exact(ctx->env->xch, domid, 1, 0, 0, pfns);
     if ( rc )
         return lib_fail_current(ctx,
                                 "xc_domain_populate_physmap_exact(any) failed");
-
     return 0;
 }
 
@@ -375,7 +371,6 @@ int lib_populate_exact_node(struct test_ctx *ctx,
                             struct lib_populate_exact_args args)
 {
     xen_pfn_t pfns[] = {args.gpfn};
-    int rc;
 
     lib_set_step(ctx, "%s", args.reason);
     rc = xc_domain_populate_physmap_exact(ctx->env->xch, args.domid,
@@ -387,7 +382,6 @@ int lib_populate_exact_node(struct test_ctx *ctx,
                                 "xc_domain_populate_physmap_exact"
                                 "(node=%u, order=%u) failed",
                                 args.node, args.order);
-
     return 0;
 }
 
@@ -395,7 +389,6 @@ int lib_expect_populate_exact_failure(struct test_ctx *ctx,
                                       struct lib_populate_exact_args args)
 {
     xen_pfn_t pfns[] = {args.gpfn};
-    int rc;
 
     lib_set_step(ctx, "%s", args.reason);
     errno = 0;
@@ -407,7 +400,6 @@ int lib_expect_populate_exact_failure(struct test_ctx *ctx,
         return lib_fail_with_errno(
             ctx, 0, "expected exact-node populate to fail for node %u",
             args.node);
-
     return 0;
 }
 
@@ -465,7 +457,6 @@ int lib_run_one_test(struct test_env *env, const struct runtime_config *cfg,
     };
     uint64_t baseline_outstanding;
     struct timespec start, end;
-    int rc;
 
     result->test = test;
     result->status = TEST_PASSED;
@@ -540,7 +531,6 @@ static void fixup_create_template(struct xen_domctl_createdomain *create,
 int lib_initialise_test_env(struct test_env *env)
 {
     xc_physinfo_t physinfo;
-    int rc;
 
     env->xch = xc_interface_open(NULL, NULL, 0);
     if ( !env->xch )
@@ -580,6 +570,11 @@ int lib_initialise_test_env(struct test_env *env)
     env->secondary_node = 0;
     env->have_secondary_node = false;
 
+    /*
+     * Pick the node with the most free memory as the primary node, and if
+     * there's a second node, pick the one with the next most free memory as
+     * the secondary.
+     */
     for ( unsigned int i = 1; i < env->num_nodes; i++ )
     {
         if ( env->meminfo[i].memfree > env->meminfo[env->primary_node].memfree )
