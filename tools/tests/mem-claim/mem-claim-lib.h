@@ -94,7 +94,7 @@ void lib_set_step(struct test_ctx *ctx, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
 int lib_fail_with_errno(struct test_ctx *ctx, int errnum, const char *fmt, ...)
     __attribute__((format(printf, 3, 4)));
-int lib_fail_current(struct test_ctx *ctx, const char *fmt, ...)
+int lib_fail(struct test_ctx *ctx, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
 int lib_skip_test(struct test_ctx *ctx, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));
@@ -118,10 +118,8 @@ int lib_destroy_domain(struct test_ctx *ctx, uint32_t *domid,
 int lib_claim_memory(struct test_ctx *ctx, uint32_t domid, uint32_t nr_claims,
                      memory_claim_t *claims, const char *reason);
 int lib_expect_claim_memory_failure(struct test_ctx *ctx, uint32_t domid,
-                                    uint32_t nr_claims,
-                                    memory_claim_t *claims,
-                                    int expected_errno,
-                                    const char *reason);
+                                    uint32_t nr_claims, memory_claim_t *claims,
+                                    int expected_errno, const char *reason);
 int lib_release_all_claims(struct test_ctx *ctx, uint32_t domid);
 int lib_claim_pages_legacy(struct test_ctx *ctx, uint32_t domid,
                            unsigned long nr_pages, const char *reason);
@@ -136,6 +134,8 @@ int lib_populate_exact_node(struct test_ctx *ctx,
                             struct lib_populate_exact_args args);
 int lib_expect_populate_exact_failure(struct test_ctx *ctx,
                                       struct lib_populate_exact_args args);
+int lib_offline_memory(struct test_ctx *ctx, uint32_t domid,
+                       unsigned long nr_pages, const char *reason);
 
 /* --- test runner --- */
 int lib_run_one_test(struct test_env *env, const struct runtime_config *cfg,
@@ -159,7 +159,7 @@ static inline const char *status_name(enum test_status status)
 }
 
 static inline bool test_is_selected(const struct runtime_config *cfg,
-                             const struct test_case *test)
+                                    const struct test_case *test)
 {
     if ( !cfg->nr_selected_ids )
         return true;

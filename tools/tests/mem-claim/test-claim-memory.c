@@ -30,6 +30,7 @@ static const struct option long_options[] = {
     {"verbose", no_argument, NULL, 'v'},
     {NULL, 0, NULL, 0},
 };
+static int rc;
 
 /*
  * CM000: basic single-node claim is tracked in outstanding pages and released
@@ -464,7 +465,7 @@ static int run_reject_zero_count_with_valid_pointer(struct test_ctx *ctx)
  * CM013: Check both xc_domain_claim_pages() and xc_domain_claim_memory()
  * with pages > free pages fail with ENOMEM.
  */
-static int run_legacy_claim_pages_gt_free(struct test_ctx *ctx)
+static int run_claim_pages_gt_free_enomem(struct test_ctx *ctx)
 {
     unsigned long free_pages;
     int rc;
@@ -555,7 +556,48 @@ static int run_zero_claim_memory_resets_outstanding(struct test_ctx *ctx)
                            "check zero claim resets outstanding to baseline");
 }
 
-/////
+/*
+ * CM016: Check how offlining memory interacts with claims.
+ * When all free pages are claimed, offlining memory should reduce
+ * the outstanding claim count and the free memory should stay at 0.
+ */
+static int run_offline_memory_with_claims(struct test_ctx *ctx)
+{
+    unsigned long free_pages;
+
+    /* Get the global free memory for sizing the claim */
+    lib_get_global_free_pages(ctx->env, &ctx->alloc_pages);
+    snprintf(ctx->result->params, sizeof(ctx->result->params),
+             "claim_pages = global_free = %lu", ctx->alloc_pages);
+
+    rc = lib_claim_memory(
+        ctx, ctx->domid, 1,
+        &(memory_claim_t){.pages = ctx->alloc_pages,
+                          .node = XEN_DOMCTL_CLAIM_MEMORY_GLOBAL},
+        "make a global claim");
+    if ( rc )
+        return rc;
+
+    rc = lib_offline_memory(ctx, ctx->domid, 1UL,
+                            "offline memory to reduce free pages below claim");
+    if ( rc )
+        return rc;
+
+    /*
+     * We expect that as the offline reduces the free pages, the outstanding
+     * claim count is also reduced to reflect the new effective claim.
+     */
+    lib_get_global_free_pages(ctx->env, &free_pages);
+    if ( free_pages != ctx->alloc_pages - 1UL )
+        return lib_fail(ctx,
+                        "expected free pages to be %lu (reduced by 1) after "
+                        "offlining memory (when all is outstanding), got %lu",
+                        ctx->alloc_pages - 1UL, free_pages);
+
+    return lib_check_claim(
+        ctx, ctx->alloc_pages - 1UL, 0,
+        "check outstanding claim count after offlining memory");
+}
 
 /*
  * List of test cases.  The fixture iterates over this list to run tests.
@@ -631,8 +673,8 @@ static const struct test_case test_cases[] = {
     },
     {
         .id = "CM013",
-        .name = "legacy_claim_pages_gt_free",
-        .run = run_legacy_claim_pages_gt_free,
+        .name = "claim_pages_gt_free_enomem",
+        .run = run_claim_pages_gt_free_enomem,
     },
     {
         .id = "CM014",
@@ -643,6 +685,11 @@ static const struct test_case test_cases[] = {
         .id = "CM015",
         .name = "zero_claim_memory_resets_outstanding",
         .run = run_zero_claim_memory_resets_outstanding,
+    },
+    {
+        .id = "CM016",
+        .name = "offline_memory_with_claims",
+        .run = run_offline_memory_with_claims,
     },
 };
 

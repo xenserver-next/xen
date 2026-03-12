@@ -15,6 +15,7 @@
 #include <xen-tools/common-macros.h>
 
 #include "mem-claim-lib.h"
+#include <xenguest.h>
 
 static int rc;
 
@@ -130,7 +131,7 @@ int lib_fail_with_errno(struct test_ctx *ctx, int errnum, const char *fmt, ...)
     return -1;
 }
 
-int lib_fail_current(struct test_ctx *ctx, const char *fmt, ...)
+int lib_fail(struct test_ctx *ctx, const char *fmt, ...)
 {
     va_list ap;
     int saved_errno = errno;
@@ -207,8 +208,7 @@ int lib_get_baseline_outstanding(struct test_ctx *ctx,
     lib_set_step(ctx, "query baseline outstanding pages");
     rc = xc_physinfo(ctx->env->xch, &physinfo);
     if ( rc )
-        return lib_fail_current(ctx,
-                                "xc_physinfo failed while capturing baseline");
+        return lib_fail(ctx, "xc_physinfo failed while capturing baseline");
 
     *baseline_outstanding = physinfo.outstanding_pages;
     return 0;
@@ -240,7 +240,7 @@ int lib_create_domain(struct test_ctx *ctx, uint32_t *domid, const char *label)
     *domid = DOMID_INVALID;
     rc = xc_domain_create(ctx->env->xch, domid, &create);
     if ( rc )
-        return lib_fail_current(ctx, "xc_domain_create(%s) failed", label);
+        return lib_fail(ctx, "xc_domain_create(%s) failed", label);
 
     lib_set_step(ctx, "set maxmem for %s domain", label);
     rc = xc_domain_setmaxmem(ctx->env->xch, *domid, -1);
@@ -250,7 +250,7 @@ int lib_create_domain(struct test_ctx *ctx, uint32_t *domid, const char *label)
 
         destroy_rc = xc_domain_destroy(ctx->env->xch, *domid);
         *domid = DOMID_INVALID;
-        return lib_fail_current(ctx, "xc_domain_setmaxmem(%s) failed", label);
+        return lib_fail(ctx, "xc_domain_setmaxmem(%s) failed", label);
     }
 
     return 0;
@@ -274,7 +274,7 @@ int lib_destroy_domain(struct test_ctx *ctx, uint32_t *domid, const char *label)
             return -1;
         }
 
-        return lib_fail_current(ctx, "xc_domain_destroy(%s) failed", label);
+        return lib_fail(ctx, "xc_domain_destroy(%s) failed", label);
     }
 
     return 0;
@@ -288,26 +288,24 @@ int lib_claim_memory(struct test_ctx *ctx, uint32_t domid, uint32_t nr_claims,
     lib_set_step(ctx, "%s", reason);
     rc = xc_domain_claim_memory(ctx->env->xch, domid, nr_claims, claims);
     if ( rc )
-        return lib_fail_current(ctx, "xc_domain_claim_memory failed");
+        return lib_fail(ctx, "xc_domain_claim_memory failed");
 
     return 0;
 }
 
 int lib_expect_claim_memory_failure(struct test_ctx *ctx, uint32_t domid,
-                                    uint32_t nr_claims,
-                                    memory_claim_t *claims,
-                                    int expected_errno,
-                                    const char *reason)
+                                    uint32_t nr_claims, memory_claim_t *claims,
+                                    int expected_errno, const char *reason)
 {
     lib_set_step(ctx, "%s", reason);
     rc = xc_domain_claim_memory(ctx->env->xch, domid, nr_claims, claims);
     if ( rc == -1 && errno == expected_errno )
         return 0;
 
-    return lib_fail_with_errno(
-        ctx, errno,
-        "expected xc_domain_claim_memory() to fail with errno=%d (%s), got rc=%d",
-        expected_errno, strerror(expected_errno), rc);
+    return lib_fail_with_errno(ctx, errno,
+                               "expected xc_domain_claim_memory() to fail with "
+                               "errno=%d (%s), got rc=%d",
+                               expected_errno, strerror(expected_errno), rc);
 }
 
 int lib_release_all_claims(struct test_ctx *ctx, uint32_t domid)
@@ -320,8 +318,7 @@ int lib_release_all_claims(struct test_ctx *ctx, uint32_t domid)
     lib_set_step(ctx, "release all claims with global zero claim");
     rc = xc_domain_claim_memory(ctx->env->xch, domid, 1, &claim);
     if ( rc )
-        return lib_fail_current(ctx,
-                                "xc_domain_claim_memory(..., global=0) failed");
+        return lib_fail(ctx, "xc_domain_claim_memory(..., global=0) failed");
     return 0;
 }
 
@@ -331,24 +328,23 @@ int lib_claim_pages_legacy(struct test_ctx *ctx, uint32_t domid,
     lib_set_step(ctx, "%s", reason);
     rc = xc_domain_claim_pages(ctx->env->xch, domid, nr_pages);
     if ( rc )
-        return lib_fail_current(ctx, "xc_domain_claim_pages(%lu) failed",
-                                nr_pages);
+        return lib_fail(ctx, "xc_domain_claim_pages(%lu) failed", nr_pages);
     return 0;
 }
 
 int lib_claim_pages_legacy_failure(struct test_ctx *ctx, uint32_t domid,
-                                   unsigned long nr_pages,
-                                   int expected_errno, const char *reason)
+                                   unsigned long nr_pages, int expected_errno,
+                                   const char *reason)
 {
     lib_set_step(ctx, "%s", reason);
     rc = xc_domain_claim_pages(ctx->env->xch, domid, nr_pages);
     if ( rc == -1 && errno == expected_errno )
         return 0;
 
-    return lib_fail_with_errno(
-        ctx, errno,
-        "expected xc_domain_claim_pages() to fail with errno=%d(%s), got rc=%d",
-        expected_errno, strerror(expected_errno), rc);
+    return lib_fail_with_errno(ctx, errno,
+                               "expected xc_domain_claim_pages() to fail "
+                               "with errno=%d(%s), got rc=%d",
+                               expected_errno, strerror(expected_errno), rc);
     return 0;
 }
 
@@ -362,8 +358,7 @@ int lib_populate_any(struct test_ctx *ctx, uint32_t domid, xen_pfn_t gpfn,
     lib_set_step(ctx, "%s", reason);
     rc = xc_domain_populate_physmap_exact(ctx->env->xch, domid, 1, 0, 0, pfns);
     if ( rc )
-        return lib_fail_current(ctx,
-                                "xc_domain_populate_physmap_exact(any) failed");
+        return lib_fail(ctx, "xc_domain_populate_physmap_exact(any) failed");
     return 0;
 }
 
@@ -374,14 +369,13 @@ int lib_populate_exact_node(struct test_ctx *ctx,
 
     lib_set_step(ctx, "%s", args.reason);
     rc = xc_domain_populate_physmap_exact(ctx->env->xch, args.domid,
-                                          args.nr_extents,
-                                          args.order,
+                                          args.nr_extents, args.order,
                                           XENMEMF_exact_node(args.node), pfns);
     if ( rc )
-        return lib_fail_current(ctx,
-                                "xc_domain_populate_physmap_exact"
-                                "(node=%u, order=%u) failed",
-                                args.node, args.order);
+        return lib_fail(ctx,
+                        "xc_domain_populate_physmap_exact"
+                        "(node=%u, order=%u) failed",
+                        args.node, args.order);
     return 0;
 }
 
@@ -393,14 +387,77 @@ int lib_expect_populate_exact_failure(struct test_ctx *ctx,
     lib_set_step(ctx, "%s", args.reason);
     errno = 0;
     rc = xc_domain_populate_physmap_exact(ctx->env->xch, args.domid,
-                                          args.nr_extents,
-                                          args.order,
+                                          args.nr_extents, args.order,
                                           XENMEMF_exact_node(args.node), pfns);
     if ( rc == 0 )
         return lib_fail_with_errno(
             ctx, 0, "expected exact-node populate to fail for node %u",
             args.node);
     return 0;
+}
+
+/* --- page offlining --- */
+#define LIB_E820_RAM 1U
+
+int lib_offline_memory(struct test_ctx *ctx, uint32_t domid,
+                       unsigned long nr_pages, const char *reason)
+{
+    struct e820entry map[E820MAX];
+    unsigned long offlined = 0;
+    int nr_entries;
+
+    lib_set_step(ctx, "%s", reason);
+
+    if ( !nr_pages )
+        return 0;
+
+    nr_entries = xc_get_machine_memory_map(ctx->env->xch, map, E820MAX);
+    if ( nr_entries < 0 )
+        return lib_fail(ctx, "xc_get_machine_memory_map() failed");
+
+    for ( int i = 0; i < nr_entries && offlined < nr_pages; i++ )
+    {
+        uint64_t start, end;
+
+        if ( map[i].type != LIB_E820_RAM || !map[i].size )
+            continue;
+
+        start = map[i].addr >> XC_PAGE_SHIFT;
+        end = (map[i].addr + map[i].size) >> XC_PAGE_SHIFT;
+
+        for ( uint64_t mfn = start; mfn < end && offlined < nr_pages; mfn++ )
+        {
+            uint32_t status;
+
+            errno = 0;
+            rc = xc_mark_page_offline(ctx->env->xch, mfn, mfn, &status);
+            if ( rc < 0 )
+                continue;
+
+            if ( (status & PG_OFFLINE_STATUS_MASK) == PG_OFFLINE_OFFLINED )
+            {
+                offlined++;
+                continue;
+            }
+
+            /* Revert unexpected states to avoid affecting later tests. */
+            rc = xc_mark_page_online(ctx->env->xch, mfn, mfn, &status);
+            if ( rc < 0 )
+                lib_appendf(ctx->result->details, sizeof(ctx->result->details),
+                            "\n    warning: failed to online page %" PRIu64
+                            " after unexpected offline status 0x%x: %d (%s)",
+                            mfn, status, errno, strerror(errno));
+        }
+    }
+
+    if ( offlined == nr_pages )
+        return 0;
+
+    errno = ENOMEM;
+    return lib_fail_with_errno(
+        ctx, errno,
+        "failed to offline %lu pages for domid=%u, only offlined %lu pages",
+        nr_pages, domid, offlined);
 }
 
 /* --- test runner --- */
