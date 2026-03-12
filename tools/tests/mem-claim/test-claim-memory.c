@@ -565,7 +565,7 @@ static int run_zero_claim_memory_resets_outstanding(struct test_ctx *ctx)
 static int run_offline_memory_with_claims(struct test_ctx *ctx)
 {
     xc_physinfo_t physinfo;
-    unsigned long free_pages, offline_pages = 10;
+    unsigned long free_pages, offline_pages = 1UL;
     int debug_rc;
 
     /* Get the global free memory for sizing the claim */

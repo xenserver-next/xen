@@ -421,11 +421,14 @@ int lib_offline_memory(struct test_ctx *ctx, uint32_t domid,
 {
     struct e820entry map[E820MAX];
     xc_physinfo_t physinfo;
-    unsigned long free_before = 0, free_after = 0;
+    unsigned long free_before = 0;
     unsigned long offlined = 0;
     unsigned long attempted = 0;
     unsigned long mark_failures = 0;
+    unsigned long query_failures = 0;
+    unsigned long skipped_non_online = 0;
     unsigned long unexpected_statuses = 0;
+    unsigned long verification_failures = 0;
     int nr_entries;
 
     lib_set_step(ctx, "%s", reason);
@@ -435,18 +438,19 @@ int lib_offline_memory(struct test_ctx *ctx, uint32_t domid,
 
     if ( !lib_get_global_free_pages(ctx->env, &free_before) &&
          !xc_physinfo(ctx->env->xch, &physinfo) )
-        lib_debugf(
-            ctx,
-            "before offlining domid=%u global_free=%lu outstanding=%" PRIu64,
-            domid, free_before, physinfo.outstanding_pages);
+        lib_debugf(ctx,
+                   "before offlining domid=%u global_free=%lu outstanding=%" PRIu64,
+                   domid, free_before, physinfo.outstanding_pages);
 
     nr_entries = xc_get_machine_memory_map(ctx->env->xch, map, E820MAX);
     if ( nr_entries < 0 )
         return lib_fail(ctx, "xc_get_machine_memory_map() failed");
 
-    for ( int i = 0; i < nr_entries && offlined < nr_pages; i++ )
+    for ( int i = nr_entries - 1; i >= 0 && offlined < nr_pages; i-- )
     {
         uint64_t start, end;
+        uint64_t mfn;
+        uint64_t backoff = 1;
 
         if ( map[i].type != LIB_E820_RAM || !map[i].size )
             continue;
@@ -455,64 +459,130 @@ int lib_offline_memory(struct test_ctx *ctx, uint32_t domid,
         end = (map[i].addr + map[i].size) >> XC_PAGE_SHIFT;
         lib_debugf(ctx,
                    "e820 RAM entry %d start=%" PRIu64 " end=%" PRIu64
-                   " pages=%" PRIu64,
+                   " pages=%" PRIu64 " scanning backwards",
                    i, start, end, end - start);
         lib_appendf(ctx->result->details, sizeof(ctx->result->details),
-                    "\n    Found e820 entry %d: start=%" PRIu64 " end=%" PRIu64
-                    " (%" PRIu64 " pages)",
+                    "\n    Found e820 entry %d: start=%" PRIu64
+                    " end=%" PRIu64 " (%" PRIu64 " pages)",
                     i, start, end, end - start);
 
-        for ( uint64_t mfn = start; mfn < end && offlined < nr_pages; mfn++ )
+        if ( end <= start )
+            continue;
+
+        mfn = end - 1;
+        while ( mfn >= start && offlined < nr_pages )
         {
             uint32_t status;
+            uint32_t verify_status;
+            uint64_t current_mfn = mfn;
+
+            errno = 0;
+            rc = xc_query_page_offline_status(ctx->env->xch, current_mfn,
+                                              current_mfn,
+                                              &status);
+            if ( rc < 0 )
+            {
+                query_failures++;
+                lib_debugf(ctx,
+                           "query before offlining failed for mfn=%" PRIu64
+                           ": %d (%s)",
+                           current_mfn, errno, strerror(errno));
+                goto next_backoff;
+            }
+
+            if ( status != 0 )
+            {
+                skipped_non_online++;
+                lib_debugf(ctx,
+                           "skipping non-online mfn=%" PRIu64
+                           " query_status=0x%x backoff=%" PRIu64,
+                           current_mfn, status, backoff);
+                goto next_backoff;
+            }
 
             attempted++;
             errno = 0;
-            rc = xc_mark_page_offline(ctx->env->xch, mfn, mfn, &status);
+            rc = xc_mark_page_offline(ctx->env->xch, current_mfn, current_mfn,
+                                      &status);
             if ( rc < 0 )
             {
                 mark_failures++;
-                continue;
+                lib_debugf(ctx,
+                           "mark offline failed for mfn=%" PRIu64
+                           ": %d (%s)",
+                           current_mfn, errno, strerror(errno));
+                goto next_backoff;
             }
 
-            if ( (status & PG_OFFLINE_STATUS_MASK) == PG_OFFLINE_OFFLINED )
+            errno = 0;
+            rc = xc_query_page_offline_status(ctx->env->xch, current_mfn,
+                                              current_mfn, &verify_status);
+            if ( rc < 0 )
             {
-                lib_debugf(ctx, "offlined mfn=%" PRIu64 " (%lu/%lu)", mfn,
-                           offlined + 1, nr_pages);
+                query_failures++;
+                verification_failures++;
+                lib_debugf(ctx,
+                           "query after offlining failed for mfn=%" PRIu64
+                           ": %d (%s)",
+                           current_mfn, errno, strerror(errno));
+                goto next_backoff;
+            }
+
+            if ( verify_status & PG_OFFLINE_STATUS_OFFLINED )
+            {
+                lib_debugf(ctx,
+                           "offlined mfn=%" PRIu64 " (%lu/%lu) mark_status=0x%x"
+                           " query_status=0x%x",
+                           current_mfn, offlined + 1, nr_pages, status,
+                           verify_status);
                 lib_appendf(ctx->result->details, sizeof(ctx->result->details),
-                            "\n    offlined page %" PRIu64, mfn);
+                            "\n    offlined page %" PRIu64, current_mfn);
                 offlined++;
+                backoff = 1;
+                if ( current_mfn == start )
+                    break;
+                mfn = current_mfn - 1;
                 continue;
             }
 
             unexpected_statuses++;
-            lib_debugf(ctx, "mfn=%" PRIu64 " returned offline status=0x%x", mfn,
-                       status);
+            verification_failures++;
+            lib_debugf(ctx,
+                       "mfn=%" PRIu64
+                       " did not transition directly to offlined mark_status=0x%x"
+                       " query_status=0x%x backoff=%" PRIu64,
+                       current_mfn, status, verify_status, backoff);
 
             /* Revert unexpected states to avoid affecting later tests. */
-            rc = xc_mark_page_online(ctx->env->xch, mfn, mfn, &status);
+            rc = xc_mark_page_online(ctx->env->xch, current_mfn, current_mfn,
+                                     &verify_status);
             if ( rc < 0 )
                 lib_appendf(ctx->result->details, sizeof(ctx->result->details),
                             "\n    warning: failed to online page %" PRIu64
                             " after unexpected offline status 0x%x: %d (%s)",
-                            mfn, status, errno, strerror(errno));
+                            current_mfn, verify_status, errno, strerror(errno));
+
+next_backoff:
+            if ( current_mfn <= start )
+                break;
+
+            if ( backoff < (UINT64_MAX >> 1) )
+                backoff <<= 1;
+
+            if ( current_mfn - start < backoff )
+                mfn = start;
+            else
+                mfn = current_mfn - backoff;
         }
     }
 
-    if ( !lib_get_global_free_pages(ctx->env, &free_after) &&
-         !xc_physinfo(ctx->env->xch, &physinfo) )
-        lib_debugf(ctx,
-                   "after offlining domid=%u attempted=%lu offlined=%lu"
-                   " mark_failures=%lu unexpected_statuses=%lu global_free=%lu"
-                   " outstanding=%" PRIu64,
-                   domid, attempted, offlined, mark_failures,
-                   unexpected_statuses, free_after, physinfo.outstanding_pages);
-    else
-        lib_debugf(ctx,
-                   "after offlining domid=%u attempted=%lu offlined=%lu"
-                   " mark_failures=%lu unexpected_statuses=%lu",
-                   domid, attempted, offlined, mark_failures,
-                   unexpected_statuses);
+    lib_debugf(ctx,
+               "after offlining domid=%u attempted=%lu offlined=%lu"
+               " mark_failures=%lu query_failures=%lu skipped_non_online=%lu"
+               " verification_failures=%lu unexpected_statuses=%lu",
+               domid, attempted, offlined, mark_failures, query_failures,
+               skipped_non_online, verification_failures,
+               unexpected_statuses);
 
     if ( offlined == nr_pages )
         return 0;
