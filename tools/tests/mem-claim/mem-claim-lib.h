@@ -125,6 +125,9 @@ int lib_expect_claim_memory_failure(struct test_ctx *ctx, uint32_t domid,
 int lib_release_all_claims(struct test_ctx *ctx, uint32_t domid);
 int lib_claim_pages_legacy(struct test_ctx *ctx, uint32_t domid,
                            unsigned long nr_pages, const char *reason);
+int lib_claim_pages_legacy_failure(struct test_ctx *ctx, uint32_t domid,
+                                   unsigned long nr_pages, int expected_errno,
+                                   const char *reason);
 
 /* --- physmap population --- */
 int lib_populate_any(struct test_ctx *ctx, uint32_t domid, xen_pfn_t gpfn,

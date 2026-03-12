@@ -480,8 +480,8 @@ static int run_legacy_claim_pages_gt_free(struct test_ctx *ctx)
     snprintf(ctx->result->params, sizeof(ctx->result->params),
              "claim_pages=%lu global_free=%lu", ctx->alloc_pages, free_pages);
 
-    rc = lib_claim_pages_legacy(
-        ctx, ctx->domid, ctx->alloc_pages,
+    rc = lib_claim_pages_legacy_failure(
+        ctx, ctx->domid, ctx->alloc_pages, ENOMEM,
         "reject xc_domain_claim_pages() with pages > global free page");
     if ( rc )
         return rc;
