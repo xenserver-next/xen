@@ -1434,7 +1434,7 @@ static struct page_info *alloc_heap_pages(
 static int reserve_offlined_page(struct page_info *head)
 {
     unsigned int node = page_to_nid(head);
-    int zone = page_to_zone(head), i, head_order = PFN_ORDER(head), count = 0;
+    int zone = page_to_zone(head), head_order = PFN_ORDER(head), count = 0;
     struct page_info *cur_head;
     unsigned int cur_order, first_dirty;
 
@@ -1455,8 +1455,8 @@ static int reserve_offlined_page(struct page_info *head)
 
     while ( cur_head < (head + (1 << head_order)) )
     {
-        struct page_info *pg;
-        int next_order;
+        struct page_info *end;
+        unsigned long mfn, remaining;
 
         if ( page_state_is(cur_head, offlined) )
         {
@@ -1466,45 +1466,61 @@ static int reserve_offlined_page(struct page_info *head)
             continue;
         }
 
-        next_order = cur_order = 0;
+        /*
+         * Find the end of the contiguous run of non-offlined pages,
+         * bounded by the original buddy extent.
+         */
+        end = cur_head;
+        while ( ++end < (head + (1 << head_order)) &&
+                !page_state_is(end, offlined) )
+            ;
 
-        while ( cur_order < head_order )
+        /*
+         * Decompose [cur_head, end) into properly aligned power-of-2
+         * chunks.  At each step, pick the largest order that:
+         *  - is naturally aligned to the current MFN,
+         *  - fits within the remaining run, and
+         *  - does not exceed head_order.
+         *
+         * Using unaligned orders would violate the buddy allocator
+         * invariant that every block on heap(node, zone, order) has its
+         * MFN aligned to 1 << order.  Without that invariant, the merge
+         * logic in _free_heap_pages() can match a non-head page of an
+         * adjacent free block (whose stale PFN_ORDER happens to be 0)
+         * and call page_list_del() on a page that is not a list member,
+         * corrupting the heap and potentially exposing in-use pages as
+         * free.
+         */
+        while ( cur_head < end )
         {
-            next_order = cur_order + 1;
+            mfn = mfn_x(page_to_mfn(cur_head));
+            remaining = end - cur_head;
 
-            if ( (cur_head + (1 << next_order)) >= (head + ( 1 << head_order)) )
-                goto merge;
+            /*
+             * The largest aligned order is the minimum of:
+             *  - the number of trailing zeros in the MFN (alignment),
+             *  - flsl(remaining) - 1 (what fits in the run), and
+             *  - head_order (never exceed the original buddy).
+             * For mfn == 0 (theoretically), alignment is unlimited.
+             */
+            cur_order = mfn ? (flsl(mfn & -mfn) - 1) : head_order;
+            cur_order = min(cur_order, (unsigned int)(flsl(remaining) - 1));
+            cur_order = min(cur_order, (unsigned int)head_order);
 
-            for ( i = (1 << cur_order), pg = cur_head + (1 << cur_order );
-                  i < (1 << next_order);
-                  i++, pg++ )
-                if ( page_state_is(pg, offlined) )
-                    break;
-            if ( i == ( 1 << next_order) )
+            page_list_add_scrub(cur_head, node, zone, cur_order,
+                                (1U << cur_order) > first_dirty ?
+                                first_dirty : INVALID_DIRTY_IDX);
+
+            /* Adjust first_dirty if needed. */
+            if ( first_dirty != INVALID_DIRTY_IDX )
             {
-                cur_order = next_order;
-                continue;
+                if ( first_dirty >= 1U << cur_order )
+                    first_dirty -= 1U << cur_order;
+                else
+                    first_dirty = 0;
             }
-            else
-            {
-            merge:
-                /* We don't consider merging outside the head_order. */
-                page_list_add_scrub(cur_head, node, zone, cur_order,
-                                    (1U << cur_order) > first_dirty ?
-                                    first_dirty : INVALID_DIRTY_IDX);
-                cur_head += (1 << cur_order);
 
-                /* Adjust first_dirty if needed. */
-                if ( first_dirty != INVALID_DIRTY_IDX )
-                {
-                    if ( first_dirty >=  1U << cur_order )
-                        first_dirty -= 1U << cur_order;
-                    else
-                        first_dirty = 0;
-                }
-
-                break;
-            }
+            cur_head += (1 << cur_order);
         }
     }
 
