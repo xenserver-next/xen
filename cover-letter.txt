@@ -1,0 +1,56 @@
+Subject: [PATCH v5 00/11] xen: Add multi-node NUMA claims for domains
+
+Hello!
+
+Thank you for your valuable feedback on the previous series! This update
+builds on that input to deliver atomic creation of multi-node memory claims
+on specific NUMA nodes, along with a matching hypercall API.
+
+The v4 review, this change, and other improvements have produced a revamped
+patch structure and a new core implementation. The patches are organized
+into four phases:
+
+ 1. Prepare: fix existing issues and refactor to ready the structure
+ 2. Add: the multi-node API; initially implement the legacy claims interface
+ 3. Implement: multi-node claims functionality in the multi-node APIs
+ 4. Introduce: toolstack interfaces and documentation
+
+Given the significant changes in this series,
+I recommend reviewing it as a whole rather than incrementally.
+
+This series contains the following patches:
+
+ 1. xen/page_alloc:  Extract releasing global claims into a function
+ 2. xen/page_alloc:  Fix to release global claims as needed when offlining pages
+ 3. xen/page_alloc:  Fix to add unclaimed pages when allocating with claims
+ 4. xen/page_alloc:  Optimize getting per-NUMA-node free page counts
+ 5. xen/page_alloc:  Split d->outstanding_pages into global and per-node claims
+ 6. xsm/flask:       Add a Flask security policy for the new hypercall
+ 7. xen/domctl:      Add the XEN_DOMCTL_claim_memory hypercall handler
+ 8. xen/page_alloc:  Add the implementation of NUMA-node-specific claims
+ 9. tools/libs/ctrl:     Add the libxenctrl API xc_domain_claim_memory()
+10. tools/ocaml/libs/xc: Add the OCaml binding for xc_domain_claim_memory()
+11. docs/guest-guide:    Add comprehensive claims and claims API documentation
+
+The updated guest-guide is available here for your review:
+https://bernhardk-xen-review.readthedocs.io/v4.22-claims.v5/guest-guide/
+
+I have incorporated many suggestions from the review process:
+
+For the refactoring patches:
+
+  - Removed accessor macros
+  - Retained Roger's original comment
+  - Fixed function formatting, ASSERT placement, and comment style
+  - Removed references to earlier commits
+  - Reverted changes to unsigned long types
+
+For the claims design, hypercall APIs, and documentation:
+
+  - Recorded in commit messages that Roger Pau Monné requested the API
+  - Added deprecation notices for the XENMEM_claim_pages hypercall
+  - Replaced claims adjustment for cross-node claims
+  - Released the OCaml runtime lock
+
+Thanks again - I hope these changes address your concerns and improve the
+overall quality of the series. Your comments and feedback are always welcome!
