@@ -65,7 +65,7 @@ static int claim_memory(struct domain *d,
     if ( !uinfo->nr_claims || uinfo->pad )
         return -EINVAL;
 
-    if ( uinfo->nr_claims > XEN_DOMCTL_CLAIM_MEMORY_MAX_CLAIMS )
+    if ( uinfo->nr_claims > MAX_NUMNODES + 1 ) /* +1 for a global claim */
         return -E2BIG;
 
     /*

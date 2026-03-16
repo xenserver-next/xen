@@ -1290,6 +1290,7 @@ DEFINE_XEN_GUEST_HANDLE(memory_claim_t);
 
 /* Claim types for the node field of memory_claim_t */
 #define XEN_DOMCTL_CLAIM_MEMORY_LEGACY 0x40000000U /* No node, legacy claim */
+#define XEN_DOMCTL_CLAIM_MEMORY_GLOBAL 0x80000000U /* No node, global claim */
 
 /*
  * XEN_DOMCTL_claim_memory
@@ -1310,9 +1311,6 @@ struct xen_domctl_claim_memory {
     uint32_t nr_claims;
     uint32_t pad;  /* Explicit padding: Reserved, initialize to 0 on input */
 };
-
-/* Maximum number of claims array elements API functions must support */
-#define XEN_DOMCTL_CLAIM_MEMORY_MAX_CLAIMS  1U /* One global host-wide claim */
 
 struct xen_domctl {
 /* Stable domctl ops: interface_version is required to be 0.  */
