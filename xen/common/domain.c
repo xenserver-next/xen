@@ -1319,7 +1319,7 @@ int domain_kill(struct domain *d)
         rspin_barrier(&d->domain_lock);
         argo_destroy(d);
         vnuma_destroy(d->vnuma);
-        domain_set_outstanding_pages(d, 0);
+        domain_set_claim_records(d, 1, &(memory_claim_t){});
         /* fallthrough */
     case DOMDYING_dying:
         rc = domain_teardown(d);

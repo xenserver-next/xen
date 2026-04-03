@@ -415,6 +415,14 @@ struct domain
     unsigned int     xenheap_pages;     /* pages allocated from Xen heap */
     /* Pages claimed but not possessed, protected by global heap_lock. */
     unsigned int     outstanding_pages;
+    unsigned int     node_claims;       /* Sum of the Node-specific claims */
+    /*
+     * struct domain is allocated in a dedicated page with more than enough
+     * spare capacity. It's efficient to use that page to store the
+     * per-node claims in it instead allocating a separate array for it.
+     */
+    unsigned int     claims[MAX_NUMNODES]; /* Array of per-NUMA-node claims */
+
     unsigned int     max_pages;         /* maximum value for domain_tot_pages() */
     unsigned int     extra_pages;       /* pages not included in domain_tot_pages() */
 
