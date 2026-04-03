@@ -1276,6 +1276,35 @@ struct xen_domctl_get_domain_state {
     uint64_t unique_id;      /* Unique domain identifier. */
 };
 
+struct xen_memory_claim {
+    uint64_aligned_t pages; /* Number of pages to claim */
+    uint32_t target;        /* node or claim type like host-wide or legacy */
+    uint32_t cmd;           /* Command for future use, initialize to 0 */
+};
+typedef struct xen_memory_claim memory_claim_t;
+DEFINE_XEN_GUEST_HANDLE(memory_claim_t);
+
+/* Special claim targets for the target field of memory_claim_t */
+#define XEN_DOMCTL_CLAIM_MEMORY_HOST     0x80000000U /* Host-wide claims */
+#define XEN_DOMCTL_CLAIM_MEMORY_LEGACY   0x40000000U /* Legacy semantics */
+
+/*
+ * XEN_DOMCTL_claim_memory
+ *
+ * Install a claim set to claim memory for a guest domain. Claims work like
+ * tickets in exchange for allocating memory for a domain later.
+ */
+struct xen_domctl_claim_memory {
+    /* IN/OUT: Array of struct xen_memory_claim */
+    XEN_GUEST_HANDLE_64(memory_claim_t) claim_set;
+    /* IN/OUT: Number of records in the claim_set array handle. */
+    uint32_t nr_entries;
+    /* IN: Operation to perform on the claim set (GET or SET)*/
+    uint32_t mode;
+#define XEN_DOMCTL_CLAIM_MEMORY_SET 0U /* Set the claim set for the domain. */
+#define XEN_DOMCTL_CLAIM_MEMORY_GET 1U /* Get the claim set of the domain. */
+};
+
 struct xen_domctl {
 /* Stable domctl ops: interface_version is required to be 0.  */
     uint32_t cmd;
@@ -1368,6 +1397,7 @@ struct xen_domctl {
 #define XEN_DOMCTL_gsi_permission                88
 #define XEN_DOMCTL_set_llc_colors                89
 #define XEN_DOMCTL_get_domain_state              90 /* stable interface */
+#define XEN_DOMCTL_claim_memory                  91
 #define XEN_DOMCTL_gdbsx_guestmemio            1000
 #define XEN_DOMCTL_gdbsx_pausevcpu             1001
 #define XEN_DOMCTL_gdbsx_unpausevcpu           1002
@@ -1436,6 +1466,7 @@ struct xen_domctl {
 #endif
         struct xen_domctl_set_llc_colors    set_llc_colors;
         struct xen_domctl_get_domain_state  get_domain_state;
+        struct xen_domctl_claim_memory      claim_memory;
         uint8_t                             pad[128];
     } u;
 };
