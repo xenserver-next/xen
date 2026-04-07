@@ -35,10 +35,8 @@ static void test_offline_head_order(int start_mfn)
     ASSERT(PFN_ORDER(page + 1) == 0);
     ASSERT(FREE_PAGES == 1);
 
-    EXPECT_FAIL_BEGIN();
     /* If the single alone page would be onlined again, needs to be order 0! */
     CHECK(PFN_ORDER(page) == 0, "BUG: Split offlined head page needs order 0");
-    EXPECT_FAIL_END(1);
 }
 
 int main(int argc, char *argv[])
