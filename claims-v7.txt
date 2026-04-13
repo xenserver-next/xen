@@ -1,0 +1,50 @@
+Hi all,
+
+This update for the NUMA-aware claims cuts the size of the implementation
+by 30%, from 477 to 338 lines (net increase: lines added - lines removed).
+
+The updated design documentation to go along with this series was submitted
+yesterday (including a link to a viewable Sphinx site).
+
+The core operational principles have been validated using the following methods:
+
+1. A series of patches for native page allocator integration tests,
+   which will follow this submission.
+
+2. A comprehensive functional system test suite running in Dom0,
+   which will follow this submission.
+
+3. A set of high-level functional integration tests and performance
+   tests, executed as part of end-to-end product deployment validation.
+
+4. Validation in a customer's standardized application performance lab
+   to confirm performance expectations. (This testing was conducted on
+   predecessor code sharing the same design; the main difference being
+   that only single-node claims were supported in the previous codebase,
+   but the principle of operation remains identical).
+
+The series has been reworked substantially in response to v6 review comments
+to focus on the most concise, minimal changes possible. Only one preparatory
+patch remains (which should be merged on its own), followed by the main
+feature, and finally the OCaml bindings.
+
+Best regards,
+Bernhard
+
+---
+
+Changes since v6:
+- Incorporated all review feedback from v6.
+- Addressed Jan's point regarding the ambiguity of the term "global".
+  Following his suggestion, this series adopts the term "host claims"
+  (short for  host-wide claims) as discussed here:
+  https://lists.xen.org/archives/html/xen-devel/2026-05/msg00026.html
+- Adjusted helper names to make the domain scope explicit and to keep the
+  release/set/get operations consistently named:
+  * deduct_global_claims()         -> domain_release_host_claims()
+  * deduct_node_claims()           -> domain_release_node_claims()
+  * domain_set_outstanding_pages() -> domain_set_claim_entries()
+  * Added: domain_get_claim_entries()
+- Kept the new code minimal for ease of review. domain_set_claim_entries()
+  now also handles the legacy XENMEM_claim_pages interface for backwards
+  compatibility, entirely replacing domain_set_outstanding_pages().
