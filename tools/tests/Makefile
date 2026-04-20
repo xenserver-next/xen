@@ -4,12 +4,14 @@ include $(XEN_ROOT)/tools/Rules.mk
 SUBDIRS-y :=
 SUBDIRS-y += domid
 SUBDIRS-y += mem-claim
+SUBDIRS-y += node-locks
 SUBDIRS-y += paging-mempool
 SUBDIRS-y += pdx
 SUBDIRS-y += rangeset
 SUBDIRS-y += resource
 SUBDIRS-y += vpci
 SUBDIRS-y += xenstore
+SUBDIRS-$(OCAML_TOOLS) += ocaml
 
 SUBDIRS-$(CONFIG_X86) += cpu-policy
 SUBDIRS-$(CONFIG_X86) += tsx
