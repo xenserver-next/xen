@@ -1,0 +1,32 @@
+Subject: xen/mm: Add tests for page offlining and fix exposed bugs
+
+Hi all,
+
+This patch series fixes several issues in reserve_offlined_page(), which
+are demonstrated and verified using the host-side integration test suite
+for the page-allocator series v2:
+
+https://lists.xen.org/archives/html/xen-devel/2026-04/msg00792.html
+https://patchwork.kernel.org/project/xen-devel/list/?series=1083329
+
+The submission (on top of its dependencies) can be retrieved with:
+git pull git@gitlab.com:bernhardkaindl/xen.git offline_page-tests-v2
+
+The tests make the current behaviour reproducible on a synthetic heap
+and exercise the specific bugs fixed by this series.
+
+Patch summary:
+
+1. tools/tests/alloc: Add integration tests for offline_page()
+2. xen/mm: Fix off-by-one preventing tail merge in reserve_offlined_page()
+3. xen/mm: Fix order of buddy heads when offlining pages
+4. tools/tests/alloc: Add test case for unaligned buddies after offlining
+5. xen/mm: Avoid merging unaligned survivors in reserve_offlined_page()
+
+Together, these tests and fixes make page offlining easier to validate
+and address cases of allocator corruption when offlined pages are split
+out of larger buddies.
+
+Thanks,
+
+  Bernhard Kaindl
