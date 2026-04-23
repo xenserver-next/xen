@@ -1237,7 +1237,7 @@ static PyObject *pyxc_shadow_mem_control(PyObject *self,
     int op;
     uint32_t dom;
     int mbarg = -1;
-    unsigned int mb;
+    uint64_t mb;
 
     static char *kwd_list[] = { "dom", "mb", NULL };
 

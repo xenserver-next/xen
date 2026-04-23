@@ -1179,7 +1179,7 @@ CAMLprim value stub_shadow_allocation_get(value xch_val, value domid)
 	CAMLparam2(xch_val, domid);
 	CAMLlocal1(mb);
 	xc_interface *xch = xch_of_val(xch_val);
-	unsigned int c_mb;
+	uint64_t c_mb;
 	int ret;
 
 	caml_enter_blocking_section();
@@ -1199,7 +1199,7 @@ CAMLprim value stub_shadow_allocation_set(value xch_val, value domid,
 {
 	CAMLparam3(xch_val, domid, mb);
 	xc_interface *xch = xch_of_val(xch_val);
-	unsigned int c_mb;
+	uint64_t c_mb;
 	int ret;
 
 	c_mb = Int_val(mb);

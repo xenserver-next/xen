@@ -843,7 +843,7 @@ typedef struct xen_domctl_shadow_op_stats xc_shadow_op_stats_t;
 int xc_shadow_control(xc_interface *xch,
                       uint32_t domid,
                       unsigned int sop,
-                      unsigned int *mb,
+                      uint64_t *mb,
                       unsigned int mode);
 long long xc_logdirty_control(xc_interface *xch,
                               uint32_t domid,

@@ -293,7 +293,7 @@ struct xen_domctl_shadow_op {
     uint32_t       mode;
 
     /* OP_GET_ALLOCATION / OP_SET_ALLOCATION */
-    uint32_t       mb;       /* Shadow memory allocation in MB */
+    uint64_aligned_t mb;     /* Shadow memory allocation in MB */
 
     /* OP_PEEK / OP_CLEAN */
     XEN_GUEST_HANDLE_64(uint8) dirty_bitmap;

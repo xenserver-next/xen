@@ -602,7 +602,7 @@ int xc_watchdog(xc_interface *xch,
 int xc_shadow_control(xc_interface *xch,
                       uint32_t domid,
                       unsigned int sop,
-                      unsigned int *mb,
+                      uint64_t *mb,
                       unsigned int mode)
 {
     int rc;
