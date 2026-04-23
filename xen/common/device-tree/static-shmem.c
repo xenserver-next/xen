@@ -96,7 +96,7 @@ static mfn_t __init acquire_shared_memory_bank(struct domain *d,
      * into domain_tot_pages().
      */
     nr_pfns = PFN_DOWN(psize);
-    if ( (UINT_MAX - d->max_pages) < nr_pfns )
+    if ( (ULONG_MAX - d->max_pages) < nr_pfns )
     {
         printk(XENLOG_ERR "%pd: Over-allocation for d->max_pages: %lu.\n",
                d, nr_pfns);
