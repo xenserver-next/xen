@@ -410,13 +410,13 @@ struct domain
      * This field should only be directly accessed by domain_adjust_tot_pages()
      * and the domain_tot_pages() helper function defined below.
      */
-    unsigned int     tot_pages;
+    unsigned long    tot_pages;
 
-    unsigned int     xenheap_pages;     /* pages allocated from Xen heap */
+    unsigned long    xenheap_pages;     /* pages allocated from Xen heap */
     /* Pages claimed but not possessed, protected by global heap_lock. */
-    unsigned int     outstanding_pages;
-    unsigned int     max_pages;         /* maximum value for domain_tot_pages() */
-    unsigned int     extra_pages;       /* pages not included in domain_tot_pages() */
+    unsigned long    outstanding_pages;
+    unsigned long    max_pages;         /* maximum value for domain_tot_pages() */
+    unsigned long    extra_pages;       /* pages not included in domain_tot_pages() */
 
 #ifdef CONFIG_MEM_SHARING
     atomic_t         shr_pages;         /* shared pages */
@@ -683,7 +683,7 @@ static inline struct page_list_head *page_to_list(
 }
 
 /* Return number of pages currently posessed by the domain */
-static inline unsigned int domain_tot_pages(const struct domain *d)
+static inline unsigned long domain_tot_pages(const struct domain *d)
 {
     ASSERT(d->extra_pages <= d->tot_pages);
 

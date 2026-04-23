@@ -408,7 +408,7 @@ static bool __must_check _shadow_prealloc(struct domain *d, unsigned int pages)
     /* Nothing more we can do: all remaining shadows are of pages that
      * hold Xen mappings for some vcpu.  This can never happen. */
     printk(XENLOG_ERR "Can't pre-allocate %u shadow pages!\n"
-           "  shadow pages total = %u, free = %u, p2m=%u\n",
+           "  shadow pages total = %lu, free = %lu, p2m=%lu\n",
            pages, d->arch.paging.total_pages,
            d->arch.paging.free_pages, d->arch.paging.p2m_pages);
 
@@ -709,7 +709,7 @@ shadow_alloc_p2m_page(struct domain *d)
         {
             d->arch.paging.p2m_alloc_failed = 1;
             dprintk(XENLOG_ERR,
-                    "d%d failed to allocate from shadow pool (tot=%u p2m=%u min=%u)\n",
+                    "d%d failed to allocate from shadow pool (tot=%lu p2m=%lu min=%u)\n",
                     d->domain_id, d->arch.paging.total_pages,
                     d->arch.paging.p2m_pages,
                     shadow_min_acceptable_pages(d));
@@ -769,12 +769,12 @@ static unsigned int sh_min_allocation(const struct domain *d)
      */
     return shadow_min_acceptable_pages(d) +
            max(max(domain_tot_pages(d) / 256,
-                   is_hvm_domain(d) ? CONFIG_PAGING_LEVELS + 2 : 0U) +
+                   is_hvm_domain(d) ? CONFIG_PAGING_LEVELS + 2 : 0UL) +
                is_hvm_domain(d),
                d->arch.paging.p2m_pages);
 }
 
-int shadow_set_allocation(struct domain *d, unsigned int pages, bool *preempted)
+int shadow_set_allocation(struct domain *d, unsigned long pages, bool *preempted)
 {
     struct page_info *sp;
 
@@ -790,7 +790,7 @@ int shadow_set_allocation(struct domain *d, unsigned int pages, bool *preempted)
         pages -= d->arch.paging.p2m_pages;
     }
 
-    SHADOW_PRINTK("current %i target %i\n",
+    SHADOW_PRINTK("current %lu target %lu\n",
                    d->arch.paging.total_pages, pages);
 
     for ( ; ; )
@@ -2409,7 +2409,7 @@ static int shadow_one_bit_disable(struct domain *d, u32 mode)
     {
         /* Get this domain off shadows */
         SHADOW_PRINTK("un-shadowing of domain %u starts."
-                       "  Shadow pages total = %u, free = %u, p2m=%u\n",
+                       "  Shadow pages total = %lu, free = %lu, p2m=%lu\n",
                        d->domain_id, d->arch.paging.total_pages,
                        d->arch.paging.free_pages, d->arch.paging.p2m_pages);
         for_each_vcpu(d, v)
@@ -2440,7 +2440,7 @@ static int shadow_one_bit_disable(struct domain *d, u32 mode)
             BUG(); /* In fact, we will have BUG()ed already */
         shadow_hash_teardown(d);
         SHADOW_PRINTK("un-shadowing of domain %u done."
-                       "  Shadow pages total = %u, free = %u, p2m=%u\n",
+                       "  Shadow pages total = %lu, free = %lu, p2m=%lu\n",
                        d->domain_id, d->arch.paging.total_pages,
                        d->arch.paging.free_pages, d->arch.paging.p2m_pages);
     }

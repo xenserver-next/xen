@@ -812,7 +812,7 @@ void paging_final_teardown(struct domain *d)
 {
     bool hap = hap_enabled(d);
 
-    PAGING_PRINTK("%pd start: total = %u, free = %u, p2m = %u\n",
+    PAGING_PRINTK("%pd start: total = %lu, free = %lu, p2m = %lu\n",
                   d, d->arch.paging.total_pages,
                   d->arch.paging.free_pages, d->arch.paging.p2m_pages);
 
@@ -834,7 +834,7 @@ void paging_final_teardown(struct domain *d)
     /* It is now safe to pull down the p2m map. */
     p2m_teardown(p2m_get_hostp2m(d), true, NULL);
 
-    PAGING_PRINTK("%pd done: total = %u, free = %u, p2m = %u\n",
+    PAGING_PRINTK("%pd done: total = %lu, free = %lu, p2m = %lu\n",
                   d, d->arch.paging.total_pages,
                   d->arch.paging.free_pages, d->arch.paging.p2m_pages);
     ASSERT(!d->arch.paging.p2m_pages);

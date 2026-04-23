@@ -221,9 +221,9 @@ struct paging_domain {
 
     /* Memory allocation (common to shadow and HAP) */
     struct page_list_head   freelist;
-    unsigned int            total_pages;  /* number of pages allocated */
-    unsigned int            free_pages;   /* number of pages on freelists */
-    unsigned int            p2m_pages;    /* number of pages allocated to p2m */
+    unsigned long           total_pages;  /* number of pages allocated */
+    unsigned long           free_pages;   /* number of pages on freelists */
+    unsigned long           p2m_pages;    /* number of pages allocated to p2m */
 
     /* log dirty support */
     struct log_dirty_domain log_dirty;
