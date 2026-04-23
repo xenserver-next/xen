@@ -327,9 +327,9 @@ static void cf_check hap_free_p2m_page(struct domain *d, struct page_info *pg)
 }
 
 /* Return the size of the pool, rounded up to the nearest MB */
-unsigned int hap_get_allocation(struct domain *d)
+unsigned long hap_get_allocation(struct domain *d)
 {
-    unsigned int pg = d->arch.paging.total_pages
+    unsigned long pg = d->arch.paging.total_pages
         + d->arch.paging.p2m_pages;
 
     return ((pg >> (20 - PAGE_SHIFT))
@@ -338,7 +338,7 @@ unsigned int hap_get_allocation(struct domain *d)
 
 /* Set the pool of pages to the required number of pages.
  * Returns 0 for success, non-zero for failure. */
-int hap_set_allocation(struct domain *d, unsigned int pages, bool *preempted)
+int hap_set_allocation(struct domain *d, unsigned long pages, bool *preempted)
 {
     struct page_info *pg;
 

@@ -760,7 +760,7 @@ shadow_free_p2m_page(struct domain *d, struct page_info *pg)
     paging_unlock(d);
 }
 
-static unsigned int sh_min_allocation(const struct domain *d)
+static unsigned long sh_min_allocation(const struct domain *d)
 {
     /*
      * Don't allocate less than the minimum acceptable, plus one page per
@@ -783,7 +783,7 @@ int shadow_set_allocation(struct domain *d, unsigned long pages, bool *preempted
     if ( pages > 0 )
     {
         /* Check for minimum value. */
-        unsigned int lower_bound = sh_min_allocation(d);
+        unsigned long lower_bound = sh_min_allocation(d);
 
         if ( pages < lower_bound )
             pages = lower_bound;
@@ -845,9 +845,9 @@ int shadow_set_allocation(struct domain *d, unsigned long pages, bool *preempted
 }
 
 /* Return the size of the shadow pool, rounded up to the nearest MB */
-static unsigned int shadow_get_allocation(struct domain *d)
+static unsigned long shadow_get_allocation(struct domain *d)
 {
-    unsigned int pg = d->arch.paging.total_pages
+    unsigned long pg = d->arch.paging.total_pages
         + d->arch.paging.p2m_pages;
     return ((pg >> (20 - PAGE_SHIFT))
             + ((pg & ((1 << (20 - PAGE_SHIFT)) - 1)) ? 1 : 0));
