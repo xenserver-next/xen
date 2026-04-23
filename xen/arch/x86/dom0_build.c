@@ -440,7 +440,7 @@ unsigned long __init dom0_compute_nr_pages(
         }
     }
 
-    d->max_pages = min_t(unsigned long, max_pages, UINT_MAX);
+    d->max_pages = min_t(unsigned long, max_pages, ULONG_MAX);
 
     return nr_pages;
 }

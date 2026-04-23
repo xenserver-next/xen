@@ -221,7 +221,7 @@ xenstat_node *xenstat_get_node(xenstat_handle * handle, unsigned int flags)
 			    ((unsigned long long)domaininfo[i].tot_pages)
 			    * handle->page_size;
 			domain->max_mem =
-			    domaininfo[i].max_pages == UINT_MAX
+			    domaininfo[i].max_pages == ULONG_MAX
 			    ? (unsigned long long)-1
 			    : (unsigned long long)(domaininfo[i].max_pages
 						   * handle->page_size);
