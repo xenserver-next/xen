@@ -1,0 +1,3 @@
+sphinx-autobuild
+sphinx-book-theme
+sphinxcontrib-mermaid

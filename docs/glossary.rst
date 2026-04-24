@@ -1,7 +1,7 @@
 .. SPDX-License-Identifier: CC-BY-4.0
 
-Glossary
-========
+Claims Glossary
+===============
 
 .. Terms should appear in alphabetical order
 

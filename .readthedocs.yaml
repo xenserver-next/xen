@@ -9,10 +9,9 @@ build:
   tools:
     python: "latest"
 
-  jobs:
-    post_install:
-      # Instead of needing a separate requirements.txt
-      - python -m pip install --upgrade --no-cache-dir sphinx-rtd-theme
+python:
+  install:
+    - requirements: docs/requirements.txt
 
 sphinx:
   configuration: docs/conf.py
