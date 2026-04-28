@@ -56,12 +56,75 @@ finally:
 
 # If your documentation needs a minimal Sphinx version, state it here.
 #
-needs_sphinx = '1.4'
+needs_sphinx = "7.0"
 
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
-extensions = []
+extensions = ["sphinx.ext.autosectionlabel"]
+
+try:
+    import sphinxcontrib.mermaid
+
+    extensions.append("sphinxcontrib.mermaid")
+except ImportError:
+    pass
+
+
+def on_build_finished(app, exception):
+    if exception:
+        return
+
+    common_install = """
+        Alternatively, you can use pipx to install sphinx and the needed
+        extras in an isolated environment with:\n
+            pipx install sphinx
+            pipx runpip sphinx install -r docs/requirements.txt\n
+        Or, use `make -C docs sphinx-env-build` to build the documentation
+        in a suitable Python environment with all dependencies.\n"""
+
+    # See https://sphinx-book-theme.readthedocs.io for more info:
+    if not sys.modules.get("sphinx_book_theme"):
+        sys.stderr.write("""
+        To fix rendering the HTML theme, install `sphinx_book_theme` in
+        your Python venv. On Debian-based systems, you can install it with:\n
+            sudo apt install python3-sphinx-book-theme""" + common_install)
+
+    # See https://sphinxcontrib-mermaid-demo.readthedocs.io
+    # or  https://github.com/mgaitan/sphinxcontrib-mermaid for more info:
+    if not sys.modules.get("sphinxcontrib.mermaid"):
+        sys.stderr.write("""
+        To fix rendering mermaid diagrams, install `sphinxcontrib.mermaid` in
+        your Python venv. On Debian-based systems, you can install it with:\n
+            sudo apt install python3-sphinxcontrib-mermaid""" + common_install)
+
+    # See https://github.com/sphinx-doc/sphinx-autobuild#readme for more info:
+    try:
+        import sphinx_autobuild
+    except ImportError:
+        print("The generated documentation is available at:")
+        print(f"file://{app.outdir}/index.html")
+        print("You can also serve it locally with:")
+        print(f"  (cd {app.outdir}; python -m http.server)")
+        print("To auto-rebuild and auto-refresh on changes, install")
+        print("`sphinx-autobuild` in your Python venv and run:")
+        print(" sphinx-autobuild docs docs/sphinx/html")
+        print("Or simply use `make -C docs sphinx-autobuild` to build & serve")
+
+
+def setup(app):
+    app.connect("build-finished", on_build_finished)
+
+
+# Extension options
+
+# sphinxcontrib.mermaid
+mermaid_init_js = """
+mermaid.initialize({ startOnLoad: true });
+"""
+
+# sphinx.ext.autosectionlabel
+autosectionlabel_prefix_document = True
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -82,7 +145,7 @@ language = 'en'
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This pattern also affects html_static_path and html_extra_path.
-exclude_patterns = [u'sphinx/output', 'Thumbs.db', '.DS_Store']
+exclude_patterns = [u'sphinx/output', 'Thumbs.db', '.DS_Store', '.sphinx']
 
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = None
@@ -93,15 +156,38 @@ highlight_language = 'none'
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
+html_title = f"Xen Hypervisor {version} Documentation"
+html_logo = "_static/logo-xen.svg"
+html_favicon = "_static/favicon-xen-32x32.png"
+
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
 try:
-    import sphinx_rtd_theme
-    html_theme = 'sphinx_rtd_theme'
-    html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
+    import sphinx_book_theme
+
+    html_theme = 'sphinx_book_theme'
+    # Theme options are theme-specific and customize the look and feel
+    # of a theme further. For a list of options available for each theme,
+    # see the documentation of that theme. e.g. for sphinx_book_theme, see
+    # https://sphinx-book-theme.readthedocs.io/en/latest/configure.html#options
+    html_theme_options = {
+        "logo": {
+            "text": f"Xen Hypervisor {version}",
+            "image_light": html_logo,
+            "image_dark": "_static/logo-xen-reverse.svg",
+        },
+        "home_page_in_toc": False,
+        # Depth of the table of contents tree to show in the right sidebar
+        "show_toc_level": 3,
+        "repository_url": "https://github.com/xen-project/xen",
+        "use_repository_button": True,
+    }
 except ImportError:
-    sys.stderr.write('Warning: The Sphinx \'sphinx_rtd_theme\' HTML theme was not found. Make sure you have the theme installed to produce pretty HTML output. Falling back to the default theme.\n')
+    sys.stderr.write(
+        "sphinx_book_theme was not found, falling back to the default theme.\n"
+    )
+
 
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for each theme, see the
@@ -112,7 +198,7 @@ except ImportError:
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = []
+html_static_path = ["_static"]
 
 # Custom sidebar templates, must be a dictionary that maps document names
 # to template names.
