@@ -1,0 +1,90 @@
+xen/mm: Host-side integration test environment for page_alloc.c
+
+Hello all,
+
+This patch series introduces a native integration test environment for
+the page allocator (page_alloc.c) as well as the DOMCTL API (domctl.c)
+
+It allows you to write tests as native test executables that call DOMCTL
+interfaces in-program to exercise the current domctl.c and page_alloc.c
+implementations in a controlled environment with a synthetic Xen heap
+directly and observe the implemented behaviour in the test case.
+
+As the code under test is built as a native executable, all amenities
+of native execution are available: Natively, AddressSantitizer is enabled,
+every ASSERT()'s content, every spin_{,un}lock() is logged, you can wrap
+functions and log their calls and you custom printf() calls if needed,
+which allows for full visibility into the page allocator code.
+
+As all code is in the same compilation unit, tests can call any function
+and test it, and with the integration of domctl.c, you can also call any
+do_domctl() call you want, which can call into the page allocator, and
+you can check the resulting internal state changes of the allocator as
+well as verify and all data returned by your do_domctl() calls directly.
+
+With it, I implemented tests for NUMA claims, offlining pages and for
+onlining pages. The latter tests demonstrate serveral bugs in the on-
+and offlining code of Xen. This series includes the memory claims tests.
+
+The claim tests verify the page allocator's behaviour with multi-node
+claim sets in scenarios that are easier to isolate and validate using a
+synthetic Xen heap and domain state, and the code is much smaller than
+equivalent full system tests, so it is very efficient and easy to use.
+
+As an example, for the support for test-driven bug fixing, it contains
+a test for offlining pages when all memory is claimed, which is then
+fixed in a test-driven way.
+
+The NUMA claims are now able to call a do_domctl proxy functions,
+allocate memory from the synthetic heap and observe using data
+returned from the do_domctl proxy how the allocations changes
+the state of the claims of the stub domains used in the test.
+
+For these tests, this series depends on the NUMA claims v7 series,
+which introduced NUMA-aware claim sets:
+
+[PATCH v7 0/7] xen/mm: Introduce NUMA-aware claim sets for domains
+https://lists.xen.org/archives/html/xen-devel/2026-04/msg00587.html
+https://patchwork.kernel.org/project/xen-devel/list/?series=1081139
+
+Its design is described in this document:
+
+[PATCH v3] docs: Draft Design Document for NUMA-aware claim sets
+https://lists.xen.org/archives/html/xen-devel/2026-04/msg00569.html
+https://patchwork.kernel.org/project/xen-devel/list/?series=1081047
+
+Patch summary:
+
+1. tools/tests/alloc: Add a test environment for the page allocator
+2. tools/tests/alloc: Add integration tests for claims and claim sets
+3. tools/tests/alloc: Add tests for offlining with claims present
+4. xen/mm: Recall claims when offlining pages if needed
+
+Thanks,
+
+  Bernhard Kaindl
+
+---
+Changes since v2:
+1. Refactored for the ability to integrate further code (xen/common/domctl.c)
+2. Added stubs for including domctl.c and do_domctl() proxy functions.
+3. Added the ability to run only selected tests; useful for debugging issues.
+4. Updated the NUMA claims tests for the NUMA claims v7 series.
+
+Changes since v1:
+1. Refactored the test environment for minimalism:
+   - Improved separation of concerns.
+   - Moved extensions to later patch series.
+   - Simplified code with targeted assertions and concise comments.
+2. Fixed file names to avoid underscores.
+3. Updated include guards to comply with CODING_STYLE.
+
+---
+PS: The bug fixed in the last commit also affects the global claims
+in Xen master when offlining pages.
+
+While offlining has known limitations, the bug fixed in this series also
+affects global claims in Xen master when pages are offlined. I will submit
+a follow-up series to address offlining itself. In the meantime, this test
+framework enables targeted testing on a synthetic Xen heap and simplifies
+validation by letting the tests observe heap-state changes during offlining.
