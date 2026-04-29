@@ -115,20 +115,29 @@ maintainers if you want to suggest a change.
      - Required
      - A project shall not contain unreachable code
      - The following are allowed:
-         - Invariantly constant conditions, e.g. if(IS_ENABLED(CONFIG_HVM)) { S; }
+         - Invariantly constant conditions, e.g.
+
+           .. code:: C
+
+              if ( IS_ENABLED(CONFIG_HVM) ) {
+                S;
+              }
+
          - Switch with a controlling value statically determined not to
            match one or more case statements
          - Functions that are intended to be referenced only from
-           assembly code (e.g. 'do_trap_fiq')
-         - asm-offsets.c, as they are not linked deliberately, because
+           assembly code (e.g. ``do_trap_fiq``)
+         - ``asm-offsets.c``, as they are not linked deliberately, because
            they are used to generate definitions for asm modules
          - Declarations without initializer are safe, as they are not
            executed
-         - Functions that are no-return due to calls to the `ASSERT_UNREACHABLE()`
-           macro in debug build configurations are not considered violations::
+         - Functions that are no-return due to calls to the ``ASSERT_UNREACHABLE()``
+           macro in debug build configurations are not considered violations:
+
+           .. code:: C
 
               static inline bool
-              arch_vcpu_ioreq_completion(enum vio_completion completion)
+              arch_vcpu_ioreq_completion(int c)
               {
                   ASSERT_UNREACHABLE();
                   return false;
@@ -141,13 +150,13 @@ maintainers if you want to suggest a change.
 
    * - `Rule 3.1 <https://gitlab.com/MISRA/MISRA-C/MISRA-C-2012/Example-Suite/-/blob/master/R_03_01.c>`_
      - Required
-     - The character sequences /* and // shall not be used within a
+     - The character sequences ``/*`` and ``//`` shall not be used within a
        comment
      - Comments containing URLs inside C-style block comments are safe
 
    * - `Rule 3.2 <https://gitlab.com/MISRA/MISRA-C/MISRA-C-2012/Example-Suite/-/blob/master/R_03_02.c>`_
      - Required
-     - Line-splicing shall not be used in // comments
+     - Line-splicing shall not be used in ``//`` comments
      -
 
    * - `Rule 4.1 <https://gitlab.com/MISRA/MISRA-C/MISRA-C-2012/Example-Suite/-/blob/master/R_04_01.c>`_
@@ -207,16 +216,20 @@ maintainers if you want to suggest a change.
 
        Clashes between bitops functions and macro names are allowed
        because they are used for input validation and error handling.
-       Example::
+       Example:
 
-           static inline void set_bit(int nr, volatile void *addr)
+       .. code:: C
+
+           static inline void set_bit(int nr, volatile void *a)
            {
-               asm volatile ( "lock btsl %1,%0"
-                              : "+m" (ADDR) : "Ir" (nr) : "memory");
+               asm volatile ( "lock btsl %1,%0 "
+                              : "+m" (a)
+                              : "Ir" (nr) : "memory");
            }
-           #define set_bit(nr, addr) ({                            \
-               if ( bitop_bad_size(addr) ) __bitop_bad_size();     \
-               set_bit(nr, addr);                                  \
+
+           #define set_bit(nr, addr) ({                       \
+               if ( bitop_bad_size(addr) ) __bitop_bad_size();\
+               set_bit(nr, addr);                             \
            })
 
        Clashes between grant table functions and macro names are allowed
