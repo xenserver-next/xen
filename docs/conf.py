@@ -68,7 +68,7 @@ needs_sphinx = "7.0"
 extensions = []
 
 # Add any paths that contain templates here, relative to this directory.
-templates_path = ['_templates']
+templates_path = [f"_templates/{theme}"]
 
 # The suffix(es) of source filenames.
 # You can specify multiple suffix as a list of string:
@@ -97,6 +97,10 @@ highlight_language = 'none'
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
+html_logo_bright_mode = "_static/logo-xen.svg"
+html_logo_dark_mode = "_static/logo-xen-reverse.svg"
+html_favicon = "_static/favicon-xen-32x32.png"
+
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
@@ -113,6 +117,14 @@ else:  # pydata and other themes:
 try:
     importlib.import_module(theme_mod)
     html_theme = theme_mod
+
+    # Theme options are theme-specific and customize the look and feel
+    # of a theme further. For a list of options available for each theme,
+    # see the documentation of that theme. e.g. for sphinx_book_theme, see
+    # https://sphinx-book-theme.readthedocs.io/en/latest/configure.html#options
+
+    if html_theme == "sphinx_rtd_theme":
+        html_logo = html_logo_dark_mode  # Logo is on a darker background in rtd
 
 except ImportError:
     sys.stderr.write(
@@ -165,11 +177,6 @@ def on_build_finished(app, exception):
 def setup(app):
     app.connect("build-finished", on_build_finished)
 
-# Theme options are theme-specific and customize the look and feel of a theme
-# further.  For a list of options available for each theme, see the
-# documentation.
-#
-# html_theme_options = {}
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
