@@ -28,7 +28,7 @@ import sphinx
 project = u'Xen'
 copyright = u'2019-%Y, The Xen development community'
 author = u'The Xen development community'
-theme = os.environ.get("XEN_SPHINX_THEME", "rtd")
+theme = os.environ.get("XEN_SPHINX_THEME", "book")
 
 if sphinx.version_info < (8, 1):
     from datetime import datetime
@@ -146,6 +146,19 @@ try:
 
     if html_theme == "sphinx_rtd_theme":
         html_logo = html_logo_dark_mode  # Logo is on a darker background in rtd
+    elif html_theme == 'sphinx_book_theme':
+        html_theme_options = {
+            "logo": {
+                "text": f"Xen Hypervisor {version}",
+                "image_light": html_logo_bright_mode,
+                "image_dark": html_logo_dark_mode,
+            },
+            "home_page_in_toc": False,
+            # Depth of the table of contents tree to show in the right sidebar
+            "show_toc_level": 3,
+            "repository_url": "https://github.com/xen-project/xen",
+            "use_repository_button": True,
+        }
 
 except ImportError:
     sys.stderr.write(
