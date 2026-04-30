@@ -7,6 +7,8 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html
 
 import importlib
+import json
+import git
 import os
 import sys
 
@@ -28,7 +30,7 @@ import sphinx
 project = u'Xen'
 copyright = u'2019-%Y, The Xen development community'
 author = u'The Xen development community'
-theme = os.environ.get("XEN_SPHINX_THEME", "rtd")
+theme = os.environ.get("XEN_SPHINX_THEME", "pydata")
 
 if sphinx.version_info < (8, 1):
     from datetime import datetime
@@ -53,6 +55,21 @@ finally:
         release = version + xen_extra
     else:
         version = release = u"unknown version"
+
+
+def git_branch():
+    current_branch = None
+    try:
+        import git
+        repo = git.Repo(search_parent_directories=True)
+        try:
+            current_branch = repo.active_branch.name
+        except TypeError:
+            sys.stderr.write("Warning: Git HEAD is in a detached state.\n")
+    except ImportError as e:
+        sys.stderr.write(f"Warning: Could not load the git module\n")
+    return current_branch or "development"
+
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -123,6 +140,7 @@ html_static_path = []
 html_logo_bright_mode = "_static/logo-xen.svg"
 html_logo_dark_mode = "_static/logo-xen-reverse.svg"
 html_favicon = "_static/favicon-xen-32x32.png"
+html_js_files = []
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
@@ -147,8 +165,43 @@ try:
     # see the documentation of that theme. e.g. for sphinx_book_theme, see
     # https://sphinx-book-theme.readthedocs.io/en/latest/configure.html#options
 
+    pydata_logo_options = {
+        "text": f"Xen {release}",
+        "image_light": html_logo_bright_mode,
+        "image_dark": html_logo_dark_mode,
+    }
+    github_url = "https://github.com/xen-project/xen"
     if html_theme == "sphinx_rtd_theme":
         html_logo = html_logo_dark_mode  # Logo is on a darker background in rtd
+    elif html_theme == 'sphinx_book_theme':
+        html_theme_options = {
+            "logo": pydata_logo_options,
+            "show_toc_level": 3,
+            "repository_url": github_url,
+            "use_repository_button": True,
+        }
+    elif html_theme == "pydata_sphinx_theme":
+        html_css_files = ['pydata-custom.css']
+        html_js_files.extend(["rtd-versions.js"])
+        html_static_path.append("_static")
+        version_switcher_json = "version-switcher.json"
+        html_theme_options = {
+            "navbar_end": ["version-switcher", "navbar-icon-links", "theme-switcher"],
+            "switcher": {
+                "json_url": f"_static/{version_switcher_json}",
+                "version_match": git_branch()
+            },
+            "logo": pydata_logo_options,
+            "show_toc_level": 3,
+            "icon_links": [
+                {
+                    "name": "Xen Project",
+                    "url": "https://xenproject.org/",
+                    "icon": html_favicon,
+                    "type": "local"
+                },
+            ]
+        }
 
 except ImportError:
     sys.stderr.write(
@@ -178,6 +231,18 @@ def on_build_finished(app, exception):
     # See https://sphinx-book-theme.readthedocs.io for more info:
     if sys.modules.get(theme_mod):
         print(f"Using the `{html_theme}` HTML theme for rendering the docs.")
+        if html_theme == "pydata_sphinx_theme":
+            current_branch = git_branch()
+            switcher_data = [
+                {
+                    "name": current_branch,
+                    "version": current_branch,
+                    "url": "/"
+                }
+            ]
+            out = os.path.join(app.outdir, "_static", version_switcher_json)
+            with open(out, "w") as f:
+                json.dump(switcher_data, f)
     else:
         sys.stderr.write(f"""
         To fix rendering the HTML theme, install `{theme_pip}` in
