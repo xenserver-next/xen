@@ -112,16 +112,16 @@ This ensures that any previous changes to the state of the system's
 unclaimed memory and the domain's total outstanding claims are complete
 and visible, and no concurrent changes to those values can happen.
 
-Protection of unpinned claims
+Protection of host-wide claims
 =============================
 
-The first check [1]_ the allocator performs is a check protecting unpinned claims
+The first check [1]_ the allocator performs is a check protecting host-wide claims
 which are part of the total pool of the claims on the entire host.
 
 1. Get the total amount of unclaimed memory available in the system.
    It is the sum of the free pages on all NUMA nodes (:c:var:`total_avail_pages`)
    minus the total amount of claimed memory across all domains
-   (:c:var:`outstanding_claims`) this includes all unpinned claims
+   (:c:var:`outstanding_claims`) this includes all host-wide claims
    and all node-specific claims.
 
 2. Check whether the request can be satisfied by the unclaimed memory itself.
@@ -154,7 +154,7 @@ Protection of node-specific claims
 This check protects claimed memory on the specific node from being allocated
 without sufficient claims.
 
-After passing the unpinned claims protection check, the allocator calls
+After passing the host-wide claims protection check, the allocator calls
 :c:expr:`get_free_buddy()` to pick nodes for allocation and check the
 node's suitability [2]_ for this request:
 
@@ -175,7 +175,7 @@ node's suitability [2]_ for this request:
 
 .. rubric:: Footnotes
 
-.. [1] In principle, the host-wide check for the protection of unpinned claims
+.. [1] In principle, the host-wide check for the protection of host-wide claims
        could be skipped for node-exact requests that are reference-counted and
        covered by the claims of the domain for that node. The added code for
        This additional check would add complexity to the code, and as long as

@@ -127,20 +127,20 @@ Key design decisions
  :c:expr:`domain.outstanding_pages`
   It remains the authoritative source for the total outstanding claims of a
   domain, and is updated on claim installation and redemption. It includes
-  both unpinned claims and node-specific claims.
-  Support for :term:`unpinned claims` is maintained for two reasons: first,
+  both host-wide claims and node-specific claims.
+  Support for :term:`host-wide claims` is maintained for two reasons: first,
   for compatibility with existing domain builders, and second, for use cases
   where a flexible claim that can be satisfied from any node is desirable.
 
   When the preferred NUMA node(s) for a domain do not have sufficient free
-  memory to satisfy the domain's memory requirements, unpinned claims provide
+  memory to satisfy the domain's memory requirements, host-wide claims provide
   a flexible fallback for the memory shortfall from the preferred node(s) that
   can be satisfied from any available node.
 
   In this case, :term:`domain builders` can use a combination of passing
   the preferred node to :c:func:`xc_domain_populate_physmap()` and
   :term:`NUMA node affinity` to steer allocations towards the preferred
-  NUMA node(s), while letting unpinned claims ensure that the shortfall
+  NUMA node(s), while letting host-wide claims ensure that the shortfall
   is available.
 
   This allows the domain builder to define a set of desired NUMA nodes to

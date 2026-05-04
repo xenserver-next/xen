@@ -41,14 +41,14 @@ Target selectors
 ~~~~~~~~~~~~~~~~
   .. c:macro:: XEN_DOMCTL_CLAIM_MEMORY_HOST
 
-    Special target selector for unpinned claims,
+    Special target selector for host-wide claims,
     which can be satisfied from any NUMA node.
 
   .. c:macro:: XEN_DOMCTL_CLAIM_MEMORY_LEGACY
 
     Special target selector for legacy claims, which is interpreted as the
     total memory target for the domain, with existing allocations subtracted
-    from it to determine the domain's new total unpinned outstanding claim.
+    from it to determine the domain's new total host-wide outstanding claim.
     It is provided for compatibility with existing :term:`domain builders`
     and can only be used in a single-entry claim set.
 
@@ -59,7 +59,7 @@ domctl.h structure
 
     struct xen_memory_claim {
         uint64_aligned_t pages; /* Number of pages to claim */
-        uint32_t target; /* NUMA node or claim type like legacy or unpinned */
+        uint32_t target; /* NUMA node or claim type like legacy or host-wide */
         uint32_t cmd;    /* Command reserved for future use, initialize to 0 */
     };
     typedef struct xen_memory_claim memory_claim_t;

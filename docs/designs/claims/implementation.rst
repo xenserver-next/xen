@@ -45,7 +45,7 @@ validating and installing claim sets.
     The function works in four phases:
 
      1. Validate claim entries and check node-specific claims availability
-     2. Validate the unpinned request against the remaining availability
+     2. Validate the host-wide request against the remaining availability
      3. Reset any current claims of the domain
      4. Install the claim set as the domain's claiming state
 
@@ -95,14 +95,14 @@ Helper functions for managing claims
 
  .. c:function:: unsigned long domain_release_host_claims(domain, release)
 
-    :param domain: The domain for which to release unpinned claims
+    :param domain: The domain for which to release host-wide claims
     :param release: The number of pages to release
     :type domain: struct domain *
     :type release: unsigned long
-    :returns: The number of unpinned pages actually deducted from the domain.
+    :returns: The number of host-wide pages actually deducted from the domain.
 
-    This function releases the specified number of unpinned claims.
-    It limits the release to the number of unpinned claims actually held by
+    This function releases the specified number of host-wide claims.
+    It limits the release to the number of host-wide claims actually held by
     the domain and updates the overall claim state accordingly.
 
     .. versionadded:: claims-v4
@@ -121,7 +121,7 @@ Helper functions for managing claims
     claim on a specific node. It limits the release to the number of
     pages actually claimed by the domain on that node and updates the
     node-local claims currently held by the domain on that node,
-    and it updates the unpinned and node-specific claim state accordingly.
+    and it updates the host-wide and node-specific claim state accordingly.
 
     .. versionadded:: claims-v5
 
@@ -374,7 +374,7 @@ and recall those claims until the claim accounting is valid again.
 
 - When total :c:var:`outstanding_claims` exceeds :c:var:`total_avail_pages`,
   :c:func:`reserve_offlined_page()` calls
-  :c:func:`domain_release_host_claims()` to recall unpinned claims
+  :c:func:`domain_release_host_claims()` to recall host-wide claims
   from domains until the overall claims accounting is valid again.
 
 This can violate claim guarantees, but it is necessary to maintain system
@@ -389,6 +389,6 @@ stability when memory must be offlined.
     This function is called during the offlining process to offline pages.
 
     If offlining a page causes available memory to fall below outstanding
-    claims, it checks the node-specific and unpinned claim accounting
+    claims, it checks the node-specific and host-wide claim accounting
     and recalls claims from domains as necessary to ensure accounting
     invariants hold after a buddy is offlined.

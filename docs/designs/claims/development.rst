@@ -44,7 +44,7 @@ node for the domain's claims.
 
    This led to the `v2 <v2_>`_ and `v3 <v3_>`_ series, adding a new hypercall
    API which designated passing an array of claims. This allowed for a more
-   flexible claim set design targeting multiple NUMA nodes and unpinned claims,
+   flexible claim set design targeting multiple NUMA nodes and host-wide claims,
    but only supported a single claim per domain at that time.
 
 .. sidebar:: Feedback and suggestions for multi-node claim sets

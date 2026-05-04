@@ -20,7 +20,7 @@ A claim set is an array of :c:type:`memory_claim_t` entries.
 
    This structure represents an individual claim entry in a claim set.
    It specifies the number of pages claimed and the target of the claim,
-   which can be a specific NUMA node or a special value for unpinned claims.
+   which can be a specific NUMA node or a special value for host-wide claims.
 
    The structure includes padding for future expansion. It is important to
    zero-initialise it or use designated initialisers to ensure forward

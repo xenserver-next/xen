@@ -16,7 +16,7 @@ Terminology
 
  claim set
   An array of :c:type:`memory_claim_t` entries, each specifying a page count
-  and a target (either a NUMA node ID or a special value for unpinned claims),
+  and a target (either a NUMA node ID or a special value for host-wide claims),
   that can be installed atomically for a domain to reserve memory on multiple
   NUMA nodes. The chapter on :ref:`designs/claims/installation:claim sets`
   provides further information on the structure and semantics of claim sets.
@@ -37,7 +37,7 @@ Terminology
   installing :term:`claims`, :term:`populating` memory, and setting up other
   resources before the :term:`domains` are started.
 
- unpinned claims
+ host-wide claims
   :term:`claims` that can be satisfied from any NUMA node, required for
   compatibility with existing domain builders and for use cases where
   strict node-local placement is not required or not possible, such as on

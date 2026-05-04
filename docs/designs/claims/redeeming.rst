@@ -25,9 +25,9 @@ Step 1:
   node, up to the size of that claim.
 Step 2:
   If the allocation exceeds :c:expr:`domain.claims[alloc_node]`, redeem the
-  remaining pages from the unpinned claims
+  remaining pages from the host-wide claims
   (:c:member:`domain.outstanding_pages` - :c:member:`domain.node_claims`),
-  up to the size of the unpinned claims.
+  up to the size of the host-wide claims.
 Step 3:
   If the allocation exceeds the combination of those claims, redeem the
   remaining pages from other per-node claims so that the domain's total

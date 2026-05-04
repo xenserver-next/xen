@@ -119,7 +119,7 @@ Claims accounting state for each domain
  .. c:struct:: domain
 
    The main structure representing a domain in Xen. It includes the
-   claims accounting state for the domain, including both unpinned
+   claims accounting state for the domain, including both host-wide
    and node-specific claims, as well as the maximum page limits for the
    domain and the lock protecting the domain's page allocation counts.
 
@@ -205,7 +205,7 @@ Claims accounting invariants
    Xen must maintain the following invariants at all times to ensure correctness
    of claims accounting:
 
- - For all claims, including node-affine and unpinned claims:
+ - For all claims, including node-affine and host-wide claims:
     :c:var:`outstanding_claims` :math:`\le` :c:var:`total_avail_pages`
 
  - For node-specific claims:
