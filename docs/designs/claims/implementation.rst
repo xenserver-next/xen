@@ -59,7 +59,8 @@ validating and installing claim sets.
 
     Phase 2 checks:
 
-     9. The total sum of the requested pages must not exceed the total unclaimed memory of the host after accounting for existing claims.
+     9. The total sum of the requested pages must not exceed the total
+        unclaimed memory of the host after accounting for existing claims.
      10. The claims must not exceed the :c:member:`domain.max_pages` limit.
          See :doc:`accounting` and :doc:`redeeming` for the accounting
          checks that enforce the domain's :c:member:`domain.max_pages` limit.
