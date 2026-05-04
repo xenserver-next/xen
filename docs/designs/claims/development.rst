@@ -113,7 +113,7 @@ v7 series
     ==================================  =======================================
     ``domain_set_outstanding_pages()``  :func:`domain_set_claim_entries()`
                                         :func:`domain_get_claim_entries()`
-    ``deduct_global_claims()``          :func:`domain_release_unpinned_claims()`
+    ``deduct_global_claims()``          :func:`domain_release_host_claims()`
     ``deduct_node_claims()``            :func:`domain_release_node_claims()`
     ==================================  =======================================
 

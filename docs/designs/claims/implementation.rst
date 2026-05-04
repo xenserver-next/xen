@@ -93,7 +93,7 @@ validating and installing claim sets.
 Helper functions for managing claims
 ************************************
 
- .. c:function:: unsigned long domain_release_unpinned_claims(domain, release)
+ .. c:function:: unsigned long domain_release_host_claims(domain, release)
 
     :param domain: The domain for which to release unpinned claims
     :param release: The number of pages to release
@@ -374,7 +374,7 @@ and recall those claims until the claim accounting is valid again.
 
 - When total :c:var:`outstanding_claims` exceeds :c:var:`total_avail_pages`,
   :c:func:`reserve_offlined_page()` calls
-  :c:func:`domain_release_unpinned_claims()` to recall unpinned claims
+  :c:func:`domain_release_host_claims()` to recall unpinned claims
   from domains until the overall claims accounting is valid again.
 
 This can violate claim guarantees, but it is necessary to maintain system

@@ -39,7 +39,7 @@ Mode
 
 Target selectors
 ~~~~~~~~~~~~~~~~
-  .. c:macro:: XEN_DOMCTL_CLAIM_MEMORY_UNPINNED
+  .. c:macro:: XEN_DOMCTL_CLAIM_MEMORY_HOST
 
     Special target selector for unpinned claims,
     which can be satisfied from any NUMA node.
@@ -66,7 +66,7 @@ domctl.h structure
     DEFINE_XEN_GUEST_HANDLE(memory_claim_t);
 
     /* Special claim targets for the target field of memory_claim_t */
-    #define XEN_DOMCTL_CLAIM_MEMORY_UNPINNED 0x80000000U /* Node-agnostic claims */
+    #define XEN_DOMCTL_CLAIM_MEMORY_HOST     0x80000000U /* Host-wide claims */
     #define XEN_DOMCTL_CLAIM_MEMORY_LEGACY   0x40000000U /* Legacy semantics */
 
     /*
@@ -150,7 +150,7 @@ C API Usage example
     memory_claim_t claims[] = {
       {.pages = 1024, .target = 0},
       {.pages = 1024, .target = 1},
-      {.pages = 1024, .target = XEN_DOMCTL_CLAIM_MEMORY_UNPINNED},
+      {.pages = 1024, .target = XEN_DOMCTL_CLAIM_MEMORY_HOST},
     };
     xc_domain_claim_memory(xch, domid, ARRAY_SIZE(claims), claims);
 
@@ -164,7 +164,7 @@ C API Usage example
 
     /* Release all remaining claims once the domain is built */
     memory_claim_t clear[] = {
-      {.pages = 0, .target = XEN_DOMCTL_CLAIM_MEMORY_UNPINNED}
+      {.pages = 0, .target = XEN_DOMCTL_CLAIM_MEMORY_HOST}
     };
     xc_domain_claim_memory(xch, domid, ARRAY_SIZE(clear), clear);
   }
