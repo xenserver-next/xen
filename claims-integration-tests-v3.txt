@@ -1,0 +1,83 @@
+xen/mm: Native test env. with page_alloc, DOMCTL, MEMCTL & SYSCTL
+
+Hello all,
+
+This patch series introduces a native integration test environment for
+the page allocator (page_alloc.c) including the APIs that depend on it:
+
+- the DOMCTL API (domctl.c) via entry points like do_domctl(),
+- the XENMEM API (memory.c) via entry points like do_memory_op(),
+- the SYSCTL API (sysctl.c) via entry points like do_sysctl().
+
+The reason for writing this environment was to provide regression tests
+for the NUMA memory claims series I posted recently, but in principle,
+any function implemented in these modules can be tested with it.
+
+The environment compiles test executables where the Xen code under test
+is built into the same compilation unit as the test case source, allowing
+full control over the environment, and stubbing, mocking, and wrapping of
+functions as needed for specific test scenarios.
+
+For the runtime buddy allocator in page_alloc.c, the environment creates
+a fresh synthetic Xen heap. Each test program can define a specific Xen
+configuration like NUMA or UMA, and define the maximum number of nodes
+and pages per node. The pages in the free lists for the test are set up
+dynamically by each test case as needed for the specific scenario.
+
+The included NUMA claims tests call do_domctl() to claim memory for the
+pre-created stub domains, call alloc_domheap_pages() to allocate memory
+for these domains from a dynamically created synthetic Xen heap, and
+observe how memory allocations using claims change the claim state of
+the stub domains, the predefined NUMA nodes, and the overall claims.
+
+As the code under test is built as a native executable, all amenities
+of native execution are available: It simply runs as a userspace program,
+meaning test cases can be compiled and run on the spot without requiring
+a running Xen hypervisor.
+
+Natively, AddressSanitizer is enabled, every ASSERT() condition and
+spin_{,un}lock() can be logged, you can wrap functions from your test
+case, and you can debug the program directly with standard debuggers.
+
+Using this environment, I have already found a number of issues in the
+memory offlining code (which is known to have corner cases) and where
+claims and offlining interact. One of the bugs I found, and can
+demonstrate with it, can result in corruption of the free list when
+firmware reports a bad page to Xen in a location prone to the bug.
+
+For these tests, this series depends on the NUMA claims v7 series,
+which introduced NUMA-aware claim sets:
+
+[PATCH v7 0/7] xen/mm: Introduce NUMA-aware claim sets for domains
+https://lists.xen.org/archives/html/xen-devel/2026-04/msg00587.html
+https://patchwork.kernel.org/project/xen-devel/list/?series=1081139
+
+Its design is described in this document:
+
+[PATCH v3] docs: Draft Design Document for NUMA-aware claim sets
+https://lists.xen.org/archives/html/xen-devel/2026-04/msg00569.html
+https://patchwork.kernel.org/project/xen-devel/list/?series=1081047
+
+Patch summary:
+
+1. tools/tests/alloc: Add a test environment for the page allocator
+2. tools/tests/alloc: Add integration tests for claims and claim sets
+3. tools/tests/alloc: Add tests for offlining with claims present
+4. xen/mm: Recall claims when offlining pages if needed
+
+Thanks,
+Bernhard Kaindl
+
+---
+Changes since v2:
+1. Improved support for testing via DOMCTL, XENMEM, and SYSCTL APIs.
+2. Added stubs for including domctl.c and do_domctl() proxy functions.
+3. Added the ability to run only selected tests; useful for debugging.
+4. Updated the NUMA claims tests for the NUMA claims v7 series.
+
+Changes since v1:
+1. Refactored the test environment for minimalism. For example, moved the
+   page list integrity checks and interceptors to future patch series because
+   they are not strictly relevant for the claims tests.
+2. Fixed file names to avoid underscores.
+3. Updated include guards to comply with CODING_STYLE.
