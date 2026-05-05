@@ -14,3 +14,4 @@ and for those interested in the internal workings of Xen.
 
    launch/index
    cache-coloring
+   claims/index
