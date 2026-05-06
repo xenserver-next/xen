@@ -474,6 +474,11 @@ mfn_t __init alloc_boot_pages(unsigned long nr_pfns, unsigned long pfn_align)
 #define NR_ZONES    (PADDR_BITS - PAGE_SHIFT + 1)
 
 #define bits_to_zone(b) (((b) < (PAGE_SHIFT + 1)) ? 1U : ((b) - PAGE_SHIFT))
+#ifdef CONFIG_SEPARATE_XENHEAP
+#define xenheap_zone_hi MEMZONE_XEN
+#else
+#define xenheap_zone_hi (bits_to_zone(xenheap_bits) - 1)
+#endif
 #define page_to_zone(pg) (is_xen_heap_page(pg) ? MEMZONE_XEN :  \
                           (flsl(mfn_x(page_to_mfn(pg))) ? : 1))
 
@@ -486,6 +491,11 @@ static unsigned long node_need_scrub[MAX_NUMNODES];
 static unsigned long *avail[MAX_NUMNODES];
 static unsigned long total_avail_pages;
 static unsigned long heap_pages[MAX_NUMNODES];
+
+/* Number of pages in the dom heap, protected by heap_lock. */
+static unsigned long domheap_avail_pages;
+/* Number of pages in the dom heap per node, protected by heap_lock. */
+static unsigned long domheap_pages[MAX_NUMNODES];
 
 static DEFINE_SPINLOCK(heap_lock);
 /* Total outstanding claims by all domains */
@@ -528,7 +538,7 @@ void get_outstanding_claims(uint64_t *free_pages, uint64_t *outstanding_pages)
 {
     spin_lock(&heap_lock);
     *outstanding_pages = outstanding_claims;
-    *free_pages = avail_heap_pages(MEMZONE_XEN + 1, NR_ZONES - 1, -1);
+    *free_pages = avail_heap_pages(xenheap_zone_hi + 1, NR_ZONES - 1, -1);
     spin_unlock(&heap_lock);
 }
 #endif /* CONFIG_SYSCTL */
@@ -939,8 +949,8 @@ int domain_set_claim_entries(struct domain *d, uint32_t nr_claims,
             goto out;
         node_set(node, nodes);
 
-        ASSERT(heap_pages[node] >= claimed_pages[node]);
-        avail_pages = heap_pages[node] - claimed_pages[node];
+        ASSERT(domheap_pages[node] >= claimed_pages[node]);
+        avail_pages = domheap_pages[node] - claimed_pages[node];
 
         if ( request > avail_pages + d->claims[node] )
         {
@@ -977,9 +987,9 @@ int domain_set_claim_entries(struct domain *d, uint32_t nr_claims,
      * plus the domain's current claims (they will be recalled before
      * installing the new claim state).
      */
-    ASSERT(total_avail_pages >= outstanding_claims);
+    ASSERT(domheap_avail_pages >= outstanding_claims);
     if ( node_requests + host_requests >
-         (total_avail_pages - outstanding_claims) + d->outstanding_pages )
+         (domheap_avail_pages - outstanding_claims) + d->outstanding_pages )
     {
         ret = -ENOMEM; /* New claims would exceed available unclaimed memory */
         goto out;
@@ -1061,10 +1071,29 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
      */
     for ( ; ; )
     {
-        unsigned long avail_pages = heap_pages[node] - claimed_pages[node];
+        unsigned long avail_pages;
 
-        if ( d && !(memflags & MEMF_no_refcount) )
-            avail_pages += d->claims[node];
+        /*
+         * Any request whose upper bound reaches into domheap zones needs
+         * to protect domheap claims.
+         */
+        if ( zone_hi > xenheap_zone_hi )
+        {
+            ASSERT(domheap_pages[node] >= claimed_pages[node]);
+            avail_pages = domheap_pages[node] - claimed_pages[node];
+
+            /*
+             * For refcounted domain allocations, domain's claims
+             * on the node are available to cover the allocation.
+             */
+            if ( d && !(memflags & MEMF_no_refcount) )
+                avail_pages += d->claims[node];
+        }
+        else
+        {
+            ASSERT(heap_pages[node] >= claimed_pages[node]);
+            avail_pages = heap_pages[node] - claimed_pages[node];
+        }
 
         /* Ensure the target node, including claims, permits this allocation */
         if ( avail_pages < (1UL << order) )
@@ -1143,6 +1172,7 @@ static struct page_info *alloc_heap_pages(
     nodeid_t node;
     unsigned int i, buddy_order, zone, first_dirty;
     unsigned long request = 1UL << order;
+    unsigned long avail_pages;
     struct page_info *pg;
     bool need_tlbflush = false;
     uint32_t tlbflush_timestamp = 0;
@@ -1163,12 +1193,17 @@ static struct page_info *alloc_heap_pages(
     spin_lock(&heap_lock);
 
     /*
-     * Claimed memory is considered unavailable unless the request
-     * is made by a domain with sufficient unclaimed pages.
+     * Requests which reach into domheap zones need to protect domheap claims.
+     * To protect them, the check has to be made against domheap_avail_pages.
      */
-    if ( (outstanding_claims + request > total_avail_pages) &&
-          ((memflags & MEMF_no_refcount) ||
-           !d || d->outstanding_pages < request) )
+    avail_pages = zone_hi > xenheap_zone_hi ? domheap_avail_pages
+                                            : total_avail_pages;
+    avail_pages -= outstanding_claims;
+
+    if ( d && !(memflags & MEMF_no_refcount) )
+        avail_pages += d->outstanding_pages; /* Claims are available */
+
+    if ( avail_pages < request )
     {
         spin_unlock(&heap_lock);
         return NULL;
@@ -1217,6 +1252,14 @@ static struct page_info *alloc_heap_pages(
     total_avail_pages -= request;
     ASSERT(heap_pages[node] >= request);
     heap_pages[node] -= request;
+
+    if ( zone > xenheap_zone_hi )
+    {
+        ASSERT(domheap_avail_pages >= request);
+        domheap_avail_pages -= request;
+        ASSERT(domheap_pages[node] >= request);
+        domheap_pages[node] -= request;
+    }
 
     if ( d && d->outstanding_pages && !(memflags & MEMF_no_refcount) )
     {
@@ -1437,6 +1480,14 @@ static int reserve_offlined_page(struct page_info *head)
         total_avail_pages--;
         ASSERT(heap_pages[node] > 0);
         heap_pages[node]--;
+
+        if ( zone > xenheap_zone_hi )
+        {
+            ASSERT(domheap_avail_pages > 0);
+            domheap_avail_pages--;
+            ASSERT(domheap_pages[node] > 0);
+            domheap_pages[node]--;
+        }
 
         page_list_add_tail(cur_head,
                            test_bit(_PGC_broken, &cur_head->count_info) ?
@@ -1761,6 +1812,13 @@ static void free_heap_pages(
     avail[node][zone] += 1 << order;
     total_avail_pages += 1 << order;
     heap_pages[node] += 1 << order;
+
+    if ( zone > xenheap_zone_hi )
+    {
+        domheap_avail_pages += 1 << order;
+        domheap_pages[node] += 1 << order;
+    }
+
     if ( need_scrub )
     {
         node_need_scrub[node] += 1 << order;
