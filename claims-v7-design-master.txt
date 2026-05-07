@@ -1,0 +1,54 @@
+Sphinx docs: Design Document for NUMA node-affine claim sets
+
+Dear reviewers,
+
+This updated design document forms the basis of the NUMA claims v7
+series and is intended to serve as a reference during review.
+
+It extends Xen's memory claim design to support installing claim sets
+spanning multiple NUMA nodes atomically. As Roger Pau Monné suggested:
+
+   Ideally, we would need to introduce a new hypercall that allows
+   making claims from multiple nodes in a single locked region, as
+   to ensure success or failure in an atomic way.
+
+This design documents that model in detail and is integrated into the
+Sphinx site below Hypervisor Guide -> Design Documents -> NUMA Claims.
+
+The rendered design document is available here for review:
+
+https://xen.kaindl.dev/claims-v7-design-master/designs/claims/
+
+The Sphinx site can be built and viewed locally as follows:
+
+  git pull git@gitlab.com:bernhardkaindl/xen.git claims-v7-design-master
+  make -C docs sphinx-env-build # xdg-open docs/sphinx/html/index.html
+  or start a minimal HTTP server:
+    (cd docs/sphinx/html; python -m http.server)
+
+Changes since v6
+----------------
+
+The review comments from v6 have been incorporated.
+
+In particular, Jan noted that "global" is ambiguous in this context,
+and following his suggestion, this series adopts the term host claims
+(short for host-wide claims) found here:
+https://lists.xen.org/archives/html/xen-devel/2026-05/msg00026.html
+
+The helper names have also been adjusted to make domain scope explicit
+and to keep the release/set/get operations named consistently:
+
+- deduct_global_claims()         -> domain_release_host_claims()
+- deduct_node_claims()           -> domain_release_node_claims()
+- domain_set_outstanding_pages() -> domain_set_claim_entries()
+- new: domain_get_claim_entries()
+
+This version also keeps the new code minimal for review and avoids
+functional duplication. domain_set_claim_entries() now also handles
+the legacy XENMEM_claim_pages interface for backwards compatibility,
+replacing domain_set_outstanding_pages().
+
+Best regards,
+
+Bernhard
