@@ -6,6 +6,15 @@ TARGET := test-paging-mempool
 .PHONY: all
 all: $(TARGET)
 
+run: $(TARGET)
+	$(call RUN_TARGETS_IF_CC_IS_HOSTCC)
+
+# The tests in this directory need to run in a privileged domain (Dom0)
+# with libxenctrl and a matching the hypervisor to test running it.
+# Therefore, they don't run with the native test target for build-time tests.
+.PHONY: test
+test:
+
 .PHONY: clean
 clean:
 	$(RM) -- *.o $(TARGET) $(DEPS_RM)

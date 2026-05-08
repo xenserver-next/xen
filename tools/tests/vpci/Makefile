@@ -8,11 +8,13 @@ all: $(TARGET)
 
 .PHONY: run
 run: $(TARGET)
-ifeq ($(CC),$(HOSTCC))
-	./$(TARGET)
-else
-	$(warning HOSTCC != CC, will not run test)
-endif
+	$(call RUN_TARGETS_IF_CC_IS_HOSTCC)
+
+# The tests in this directory need to run in a privileged domain (Dom0)
+# with libxenctrl and a matching the hypervisor to test running it.
+# Therefore, they don't run with the native test target for build-time tests.
+.PHONY: test
+test:
 
 $(TARGET): vpci.c vpci.h list.h private.h main.c emul.h
 	$(CC) $(CFLAGS_xeninclude) -include emul.h -g -o $@ vpci.c main.c

@@ -11,14 +11,7 @@ all: $(TARGETS)
 #  Can also be called with "make run-tests-mem-claim" from the toplevel.
 .PHONY: run
 run: $(TARGETS)
-ifeq ($(CC),$(HOSTCC))
-	set -e;             \
-	for test in $? ; do \
-		./$$test ;  \
-	done
-else
-	$(warning HOSTCC != CC, will not run test)
-endif
+	$(RUN_TARGETS_IF_CC_IS_HOSTCC)
 
 # The tests in this directory need to run in a privileged domain (Dom0)
 # with libxenctrl and a matching the hypervisor to test running it.

@@ -189,7 +189,7 @@ INSTALL_PYTHON_PROG = \
 %.opic: %.S
 	$(CC) $(CPPFLAGS) -DPIC $(CFLAGS) -fPIC -c -o $@ $< $(APPEND_CFLAGS)
 
-subdirs-all subdirs-clean subdirs-install subdirs-distclean subdirs-uninstall: .phony
+subdirs-all subdirs-clean subdirs-install subdirs-distclean subdirs-run subdirs-test subdirs-uninstall: .phony
 	@set -e; for subdir in $(SUBDIRS) $(SUBDIRS-y); do \
 		$(MAKE) subdir-$(patsubst subdirs-%,%,$@)-$$subdir; \
 	done
@@ -199,6 +199,20 @@ subdir-all-% subdir-clean-% subdir-install-% subdir-uninstall-%: .phony
 
 subdir-distclean-%: .phony
 	$(MAKE) -C $* distclean
+
+subdir-run-%: .phony
+	$(MAKE) -C $* run
+
+subdir-test-%: .phony
+	$(MAKE) -C $* test
+
+ifeq ($(CC),$(HOSTCC))
+define RUN_TARGETS_IF_CC_IS_HOSTCC
+set -ex; for test in $? ; do LD_LIBRARY_PATH=$(DISTDIR)/install$(libdir) ./$$test ; done
+endef
+else
+RUN_TARGETS_IF_CC_IS_HOSTCC = $(warning $(HOSTCC)!=$(CC), will not run targets)
+endif
 
 no-configure-targets := distclean subdir-distclean% clean subdir-clean% %-dir-force-update
 ifeq (,$(filter $(no-configure-targets),$(MAKECMDGOALS)))
