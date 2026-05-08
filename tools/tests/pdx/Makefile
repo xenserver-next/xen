@@ -6,16 +6,9 @@ TARGETS := test-pdx-mask test-pdx-offset
 .PHONY: all
 all: $(TARGETS)
 
-.PHONY: run
-run: $(TARGETS)
-ifeq ($(CC),$(HOSTCC))
-	set -e;             \
-	for test in $? ; do \
-		./$$test ;  \
-	done
-else
-	$(warning HOSTCC != CC, will not run test)
-endif
+.PHONY: run test
+run test: $(TARGETS)
+	$(call RUN_TARGETS_IF_CC_IS_HOSTCC)
 
 .PHONY: clean
 clean:

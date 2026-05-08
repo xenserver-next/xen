@@ -18,5 +18,5 @@ SUBDIRS-$(CONFIG_X86) += x86_emulator
 endif
 SUBDIRS-$(CONFIG_X86) += native
 
-.PHONY: all clean install distclean uninstall
-all clean distclean install uninstall: %: subdirs-%
+.PHONY: all clean install distclean uninstall run test
+all clean distclean install uninstall run test: %: subdirs-%

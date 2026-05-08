@@ -15,9 +15,9 @@ endif
 .PHONY: all
 all: $(TARGETS)
 
-.PHONY: run
-run: $(TARGETS)
-	./$<
+.PHONY: run test
+run test: $(TARGETS)
+	$(call RUN_TARGETS_IF_CC_IS_HOSTCC)
 
 .PHONY: clean
 clean:

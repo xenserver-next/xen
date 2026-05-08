@@ -39,9 +39,9 @@ endef
 .PHONY: all
 all: $(TESTS)
 
-.PHONY: run
-run: $(TESTS)
-	set -e; $(foreach t,$(TESTS),./$(t);)
+.PHONY: run test
+run test: $(TESTS)
+	$(call RUN_TARGETS_IF_CC_IS_HOSTCC)
 
 .PHONY: clean
 clean:
