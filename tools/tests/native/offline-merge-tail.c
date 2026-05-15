@@ -53,11 +53,7 @@ static void test_merge_tail_pair(int start_mfn)
      * Offlining page 1 results in splitting the original order-2 buddy into:
      * - pages[0] as an order-0 buddy
      * - pages[1] is the offlined page, removed from the free list
-     * - pages[2] as an order-0 buddy
-     * - pages[3] as an order-0 buddy:
-     * +---------------+               +---------------+---------------+
-     * | single page   | offlined page | single page   | single page   |
-     * +---------------+               +---------------+---------------+
+     * - pages[2] and pages[3] as an unaligned order-1 buddy
      *
      * Tail 2 & 3 are aligned, so they should be merged into an order-1 buddy:
      * +---------------+               +---------------+---------------+
@@ -71,14 +67,12 @@ static void test_merge_tail_pair(int start_mfn)
     ASSERT(pages[1].u.free.first_dirty == INVALID_DIRTY_IDX);
 
     /* The tail pair is expected to be merged into one order-1 buddy. */
-    EXPECT_FAIL_BEGIN();
     CHECK(PFN_ORDER(&pages[2]) == 1,
           "The pair of tail pages should be merged into an order-1 buddy");
     CHECK(pages[2].u.free.first_dirty == 1, "In tail buddy, the 2nd is dirty");
     /* The tail page of the merged buddy does not use first_dirty. */
     CHECK(pages[3].u.free.first_dirty == INVALID_DIRTY_IDX,
           "Tail page of the merged buddy should not set first_dirty");
-    EXPECT_FAIL_END(3);
 }
 
 int main(int argc, char *argv[])
