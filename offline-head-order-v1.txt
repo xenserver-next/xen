@@ -1,0 +1,27 @@
+xen/mm: Reset PFN_ORDER for offlined buddy heads
+
+This series fixes an inconsistency in the PFN_ORDER annotation for
+pages that are offlined when they are the head of a free buddy.
+
+When reserve_offlined_page() splits a buddy and moves offlined
+subpages to the offlined lists, the former buddy head would be
+left annotated with its original order even though it is now a
+single page. While this does not cause functional regressions,
+it is misleading.
+
+Patch 1 adds a native regression test that reproduces and documents
+the problem. The test seeds an order-1 buddy, offlines the head page,
+verifies the tail becomes order-0, and checks the offlined head's order.
+
+Patch 2 resets PFN_ORDER to 0 for offlined buddy heads inside
+reserve_offlined_page() when moving the page to the offlined list
+and updates the regression test to assert the corrected behaviour.
+
+This series is based on the native test environment v3 for NUMA claims
+https://lists.xen.org/archives/html/xen-devel/2026-05/msg01163.html
+
+which in turn is based on the NUMA claim sets v7 series:
+https://lists.xen.org/archives/html/xen-devel/2026-05/msg00363.html
+Please help to review and ack it (It should be eligible for Xen 4.22)
+
+Signed-off-by: Bernhard Kaindl <bernhard.kaindl@citrix.com>
