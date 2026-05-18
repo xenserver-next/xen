@@ -1,0 +1,36 @@
+tools/tests/native: Native test environment for NUMA claim sets
+
+Dear reviewers,
+
+This patch series introduces a native test environment for Xen,
+currently focused on the hypercall API and exercising the page
+allocator APIs in native test programs. The available APIs are:
+
+- The DOMCTL APIs in xc_domain.c, e.g. xc_domain_claim_memory().
+- The XENMEM APIs in xc_domain.c, e.g. xc_domain_claim_pages().
+- The SYSCTL APIs in xc_domain.c, e.g. xc_availheap().
+
+Where needed, test cases can call Xen functions directly, and
+can check the heap state e.g. to check consistency. Any issues
+can be investigated directly without rebooting a Xen instance.
+
+The second patch adds regression tests for the NUMA claim sets
+v7 series, so this series depends on it.
+Please help to review/ack it. It should be eligible for Xen 4.22:
+
+[PATCH v7 0/7] xen/mm: Introduce NUMA-aware claim sets for domains
+https://lists.xen.org/archives/html/xen-devel/2026-05/msg00363.html
+https://patchwork.kernel.org/project/xen-devel/list/?series=1091810
+
+For local review and test, you can pull and the claims-v7 code and the tests:
+
+$ git pull git@gitlab.com:bernhardkaindl/xen.git claims-native-tests-v3
+$ make -C tools/tests/native test cross=y # see tools/tests/native/README.rst
+
+Thanks,
+Bernhard Kaindl
+
+Changes since v2:
+- Replaced shims that mimicked sched.h and mm.h with the real Xen headers
+- Updated and extended the tests for the NUMA claims v7 series
+- Changed test calls to use DOMCTL, XENMEM and SYSCTL APIs in xc_domain.c
