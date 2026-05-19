@@ -17,32 +17,6 @@
  *
  * Copyright (C) 2026 Cloud Software Group
  */
-#define TEST_WRAP_XEN_INCLUDE_XEN_MM_H
-#include "harness/mm-wrapper.h"
-
-static bool expect_free_list_corruption;
-
-/*
- * Wrap page_list_del() to not fail the test by virtue of the prepared
- * free list state but continue the test like a running Xen instance
- * would in many cases. Assert and expect the corruption, and continue.
- */
-static inline void wrap_page_list_del(struct page_info *page,
-                                      struct page_list_head *head)
-{
-    printf("page_list_del: page MFN %lu, order %u\n",
-           mfn_x(page_to_mfn(page)), PFN_ORDER(page));
-
-    if (expect_free_list_corruption)
-        EXPECT_FAIL_BEGIN();
-    CHECK(page->list.next && page->list.prev, "The free list is corrupt now!");
-    if (expect_free_list_corruption)
-        EXPECT_FAIL_END(1);
-
-    if (page->list.next && page->list.prev)
-        page_list_del(page, head);
-}
-#define page_list_del(page, head) wrap_page_list_del(page, head)
 
 /*
  * Include the main test library that sets up scenarios, asserts
@@ -65,13 +39,10 @@ static void test_unaligned_buddy_merge(int start_mfn)
     CHECK(status & PG_OFFLINE_OFFLINED, "Page should be offlined");
 
     /* Assert */
-    EXPECT_FAIL_BEGIN();
     CHECK(page_aligned(pg + 1), "The buddy #%lu is not aligned to order-%d",
                                 mfn_x(page_to_mfn(pg + 1)), PFN_ORDER(pg + 1));
-    EXPECT_FAIL_END(1);
 
     /* Allocate and free a page to trigger buddy merging on free. */
-    expect_free_list_corruption = true;
     free_domheap_pages(alloc_domheap_pages(dom1, order0, 0), order0);
 
     /*
@@ -86,20 +57,10 @@ static void test_unaligned_buddy_merge(int start_mfn)
     CHECK((pg = alloc_domheap_pages(dom1, order1, 0)), "Alloc the order-1 pg");
 
     /* Inspect the predecessor (pg is the tail of the unaligned buddy) */
-    EXPECT_FAIL_BEGIN();
     CHECK(page_aligned(pg - 1), "The buddy #%lu is not aligned to order-%d!",
                                 mfn_x(page_to_mfn(pg - 1)), PFN_ORDER(pg - 1));
-    EXPECT_FAIL_END(1);
 
     /* Allocate the remaining page; a clean heap should not hit BUG(). */
-    testcase_assert_expect_to_hit_bug = true;
-    /*
-     * As described above, if pg is the tail of an unaligned order-1 buddy,
-     * the unaligned buddy is still on the free list and this allocation will
-     * remove it from the free list and check alloc_heap_pages() checks the
-     * buddies to have a reference count of zero, and the already allocated
-     * page is returned as the tail of the unaligned buddy, causing the BUG().
-     */
     alloc_domheap_pages(dom1, order0, 0); /* Triggers BUG() */
 }
 
@@ -115,4 +76,3 @@ int main(int argc, char *argv[])
 
     return test_complete();
 }
-
