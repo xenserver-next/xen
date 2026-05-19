@@ -40,9 +40,7 @@ static void test_offline_head_order(int start_mfn)
     ASSERT(status == PG_OFFLINE_STATUS_OFFLINED);
 
     /* Check the order of the offlined head page. */
-    EXPECT_FAIL_BEGIN(); /* PFN_ORDER(page) should 0, but is still 1 */
     ASSERT(PFN_ORDER(page) == 0);
-    EXPECT_FAIL_END(1);
 
     /*
      * Allocate the successor page of the offlined page. This prevents
@@ -51,12 +49,6 @@ static void test_offline_head_order(int start_mfn)
     struct page_info *pg = alloc_domheap_pages(dom1, order0, 0);
     ASSERT(pg == page + 1);
     ASSERT(FREE_PAGES == 0);
-
-    /*
-     * The order of the split head page is still 1. Online the page again to
-     * confirm that onlining it causes the order to be corrected to 0.
-     */
-    ASSERT(PFN_ORDER(page) == 1);
 
     /* Online the offlined former head page. */
     ASSERT(online_page(page_to_mfn(page), &status) == 0);

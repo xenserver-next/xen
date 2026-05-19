@@ -1478,6 +1478,13 @@ static int reserve_offlined_page(struct page_info *head)
         ASSERT(node_avail_pages[node] > 0);
         node_avail_pages[node]--;
 
+        /*
+         * All offlined pages are standalone pages: If this offlined page was
+         * the head of a higher-order buddy, we need to reset its order to 0:
+         */
+        if ( cur_head == head && head_order != 0 )
+            PFN_ORDER(cur_head) = 0;
+
         page_list_add_tail(cur_head,
                            test_bit(_PGC_broken, &cur_head->count_info) ?
                            &page_broken_list : &page_offlined_list);
