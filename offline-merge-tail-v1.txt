@@ -1,0 +1,62 @@
+xen/mm: Fix off-by-one for tail merge in reserve_offlined_page()
+
+Patch 1 adds a native regression test that reproduces and documents
+the problem. The test seeds an order-2 buddy, offlines a subpage
+of it and observes the bug of not merging the tail pages of the buddy.
+
+Patch 2 fixes the off-by-one error stopping merging the tail pages
+and updates the regression test to assert the corrected behaviour.
+
+In detail, the issue is:
+
+reserve_offlined_page() reserves pages marked for offlining and
+returns free buddies from the remaining healthy tail pages back
+to the free list.
+
+Consider an order-2 buddy (4 pages) with the following layout:
++---------------+---------------+---------------+---------------+
+| head page       tail page 1,    tail page 2     tail page 3   |
+| PFN_ORDER(pg)   marked as to                                  |
+| == 2            be offlined                                   |
++---------------+---------------+---------------+---------------+
+
+The expected result after removing tail page 1 and returning the
+remaining healthy pages to the free list would be:
+
++---------------+               +---------------+---------------+
+| single page   | offlined page | head page       tail page     |
+| PFN_ORDER(pg) | not returned  | PFN_ORDER(pg)                 |
+| == 0          | to the heap   | == 1                          |
++---------------+               +---------------+---------------+
+
+A trivial off-by-one error in the growth loop stops the growth loop
+early before the tail end of the original buddy and we end up with:
+
++---------------+               +---------------+---------------+
+| single page   | offlined page | single page   | single page   |
+| PFN_ORDER(pg) | not returned  | PFN_ORDER(pg) | PFN_ORDER(pg) |
+| == 0          | to the heap   | == 0          | == 0          |
++---------------+               +---------------+---------------+
+
+If the offlined page was in a much larger buddy, this would lead
+to much more memory not available for higher order allocations
+requiring the full tail end of the original buddy for allocation.
+
+Fix the growth loop to correctly grow the buddy to the tail end
+to make the full allocation unit available for future allocation
+and update the test case to confirm the expected result and to
+prevent regressions in the future.
+
+This series is based on the native test environment v3 for NUMA claims
+https://lists.xen.org/archives/html/xen-devel/2026-05/msg01163.html
+
+In turn, it is based on the NUMA claim sets v7 series:
+https://lists.xen.org/archives/html/xen-devel/2026-05/msg00363.html
+Please help to review and ack it (It should be eligible for Xen 4.22)
+
+You can this series with all dependencies for review and test:
+
+$ git pull git@gitlab.com:bernhardkaindl/xen.git offline-merge-tail
+$ make -C tools/tests/native TARGETS=offline-merge-tail test
+
+Signed-off-by: Bernhard Kaindl <bernhard.kaindl@citrix.com>
