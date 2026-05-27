@@ -1,0 +1,67 @@
+xen/mm: Ensure page offlining only creates properly aligned buddies
+
+This series fixes a bug in reserve_offlined_page() where growing
+buddies around offlined pages may create misaligned buddies and
+return them to the free lists.
+
+For example, pages may be offlined following an MCE caused by faulty RAM.
+Once a misaligned buddy has been placed on a free list, a particular
+sequence of allocations and frees may cause the same page to be allocated
+more than once, eventually triggering a Xen BUG() in alloc_heap_pages().
+
+As requested for backporting the fix, the first patch adds the alignment
+check while the second patch now adds the regression test for this issue.
+
+As minimal example, consider an order-2 buddy (4 pages) with this layout:
+
+   +---------------+-----------------+-----------------+----------------+
+   | head page     | tail page 1     | tail page 2     | tail page 3    |
+   +---------------+-----------------+-----------------+----------------+
+
+reserve_offline_page() then merges unaligned tail pages:
+
+   +---------------+-----------------+-----------------+----------------+
+   | offlined page |     head page with a tail page    | single page    |
+   +---------------+-----------------+-----------------+----------------+
+
+When a single page is allocated from this buddy, MFN 7 is allocated:
+
+        MFN 4             MFN 5             MFN 6             MFN 7
+  +---------------+-----------------+-----------------+----------------+
+  | offlined page |    head page        tail page     | allocated page |
+  +---------------+-----------------+-----------------+----------------+
+
+If MFN 7 is freed, the predecessor merge in free_heap_pages() kicks in,
+merging MFN 7 with its naturally aligned predecessor page at MFN 6:
+
+        MFN 4             MFN 5             MFN 6            MFN 7
+  +---------------+-----------------+-----------------+
+  | offlined page |    head page         tail page    |
+  +---------------+-----------------+-----------------+----------------+
+                                    |    head page        tail page    |
+                                    +-----------------+----------------+
+
+The next allocations would allocate MFN 7 again and MFN 6 as well:
+
+        MFN 4             MFN 5             MFN 6            MFN 7
+  +---------------+-----------------+-----------------+
+  | offlined page |    head page         tail page    | <- BUG() on alloc
+  +---------------+-----------------+-----------------+----------------+
+                                    |   in-use page   |   in-use page  |
+                                    +-----------------+----------------+
+
+When the next page from this buddy is allocated, get_free_page() returns
+the buddy head MFN 5. An order-0 allocation splits page 6, or an order-1
+allocation allocates the whole unaligned buddy. alloc_heap_page()
+catches the attempt to allocate MFN 6 for a second time as a bug:
+
+   pg[0] MFN 842adc c=0x4000000000000000 o=0 v=0 t=0
+   Xen BUG at common/page_alloc.c:1324
+
+You can pull this series with the regression test environment to run it:
+https://lists.xen.org/archives/html/xen-devel/2026-05/msg01163.html
+git pull git@gitlab.com:bernhardkaindl/xen.git offline-unaligned-buddies-v2
+make -C tools/tests/native TARGETS=offline-unaligned test
+
+Fixes: e4865c2315 ('Page offline support in Xen side')
+Signed-off-by: Bernhard Kaindl <bernhard.kaindl@citrix.com>
