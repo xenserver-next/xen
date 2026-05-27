@@ -1,0 +1,40 @@
+xen/mm: Fix off-by-one for tail merge in reserve_offlined_page()
+
+After offlining pages, reserve_offlined_page() attempts to grow larger
+buddies between the offlined pages, but due to an off-by-one, this
+fails at the tail end of the span of pages of the containing buddy.
+
+As requested for backporting the fix, the first patch fixes the
+issue while the second patch adds the regression test for it.
+
+Consider an order-2 buddy (4 pages) with the following layout:
++---------------+---------------+---------------+---------------+
+| head page       tail page 1,    tail page 2     tail page 3   |
+| PFN_ORDER(pg)   marked as to                                  |
+| == 2            be offlined                                   |
++---------------+---------------+---------------+---------------+
+
+The expected result after removing tail page 1 and returning the
+remaining healthy pages to the free list would be:
+
++---------------+               +---------------+---------------+
+| single page   | offlined page | head page       tail page     |
+| PFN_ORDER(pg) | not returned  | PFN_ORDER(pg)                 |
+| == 0          | to the heap   | == 1                          |
++---------------+               +---------------+---------------+
+
+A trivial off-by-one error in the growth loop stops the growth loop
+early before the tail end of the original buddy and we end up with:
+
++---------------+               +---------------+---------------+
+| single page   | offlined page | single page   | single page   |
+| PFN_ORDER(pg) | not returned  | PFN_ORDER(pg) | PFN_ORDER(pg) |
+| == 0          | to the heap   | == 0          | == 0          |
++---------------+               +---------------+---------------+
+
+You can pull this series with the regression test environment to run it:
+$ git pull git@gitlab.com:bernhardkaindl/xen.git offline-merge-tail-v2
+$ make -C tools/tests/native TARGETS=offline-merge-tail test
+
+Fixes: e4865c2315 ('Page offline support in Xen side')
+Signed-off-by: Bernhard Kaindl <bernhard.kaindl@citrix.com>
