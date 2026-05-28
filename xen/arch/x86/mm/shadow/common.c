@@ -302,7 +302,7 @@ sh_validate_guest_entry(struct vcpu *v, mfn_t gmfn, void *entry, u32 size)
  * allow for more than ninety allocated pages per vcpu.  We round that
  * up to 128 pages, or half a megabyte per vcpu.
  */
-static unsigned int shadow_min_acceptable_pages(const struct domain *d)
+static unsigned long shadow_min_acceptable_pages(const struct domain *d)
 {
     return d->max_vcpus * 128;
 }
@@ -408,7 +408,7 @@ static bool __must_check _shadow_prealloc(struct domain *d, unsigned int pages)
     /* Nothing more we can do: all remaining shadows are of pages that
      * hold Xen mappings for some vcpu.  This can never happen. */
     printk(XENLOG_ERR "Can't pre-allocate %u shadow pages!\n"
-           "  shadow pages total = %u, free = %u, p2m=%u\n",
+           "  shadow pages total = %lu, free = %lu, p2m=%lu\n",
            pages, d->arch.paging.total_pages,
            d->arch.paging.free_pages, d->arch.paging.p2m_pages);
 
@@ -709,7 +709,7 @@ shadow_alloc_p2m_page(struct domain *d)
         {
             d->arch.paging.p2m_alloc_failed = 1;
             dprintk(XENLOG_ERR,
-                    "d%d failed to allocate from shadow pool (tot=%u p2m=%u min=%u)\n",
+                    "d%d failed to allocate from shadow pool (tot=%lu p2m=%lu min=%lu)\n",
                     d->domain_id, d->arch.paging.total_pages,
                     d->arch.paging.p2m_pages,
                     shadow_min_acceptable_pages(d));
@@ -760,22 +760,22 @@ shadow_free_p2m_page(struct domain *d, struct page_info *pg)
     paging_unlock(d);
 }
 
-static unsigned int sh_min_allocation(const struct domain *d)
+static unsigned long sh_min_allocation(const struct domain *d)
 {
     /*
      * Don't allocate less than the minimum acceptable, plus one page per
      * megabyte of RAM (for the p2m table, minimally enough for HVM's setting
      * up of slot zero and an LAPIC page), plus one for HVM's 1-to-1 pagetable.
      */
-    unsigned int extra = max(domain_tot_pages(d) / 256,
-                             is_hvm_domain(d) ? CONFIG_PAGING_LEVELS + 2 : 0UL) +
-                         is_hvm_domain(d);
+    unsigned long extra = max(domain_tot_pages(d) / 256,
+                              is_hvm_domain(d) ? CONFIG_PAGING_LEVELS + 2 : 0UL) +
+                          is_hvm_domain(d);
 
     return shadow_min_acceptable_pages(d) +
            max(extra, d->arch.paging.p2m_pages);
 }
 
-int shadow_set_allocation(struct domain *d, unsigned int pages, bool *preempted)
+int shadow_set_allocation(struct domain *d, unsigned long pages, bool *preempted)
 {
     struct page_info *sp;
 
@@ -784,14 +784,14 @@ int shadow_set_allocation(struct domain *d, unsigned int pages, bool *preempted)
     if ( pages > 0 )
     {
         /* Check for minimum value. */
-        unsigned int lower_bound = sh_min_allocation(d);
+        unsigned long lower_bound = sh_min_allocation(d);
 
         if ( pages < lower_bound )
             pages = lower_bound;
         pages -= d->arch.paging.p2m_pages;
     }
 
-    SHADOW_PRINTK("current %i target %i\n",
+    SHADOW_PRINTK("current %lu target %lu\n",
                    d->arch.paging.total_pages, pages);
 
     for ( ; ; )
@@ -846,12 +846,12 @@ int shadow_set_allocation(struct domain *d, unsigned int pages, bool *preempted)
 }
 
 /* Return the size of the shadow pool, rounded up to the nearest MB */
-static unsigned int shadow_get_allocation(struct domain *d)
+static unsigned long shadow_get_allocation(struct domain *d)
 {
-    unsigned int pg = d->arch.paging.total_pages
+    unsigned long pg = d->arch.paging.total_pages
         + d->arch.paging.p2m_pages;
     return ((pg >> (20 - PAGE_SHIFT))
-            + ((pg & ((1 << (20 - PAGE_SHIFT)) - 1)) ? 1 : 0));
+            + ((pg & ((1UL << (20 - PAGE_SHIFT)) - 1)) ? 1 : 0));
 }
 
 /**************************************************************************/
@@ -2085,7 +2085,6 @@ int shadow_enable(struct domain *d, u32 mode)
  * disabled.
  * Returns 0 for success, -errno for failure. */
 {
-    unsigned int old_pages;
     struct page_info *pg = NULL;
     uint32_t *e;
     int rv = 0;
@@ -2103,8 +2102,7 @@ int shadow_enable(struct domain *d, u32 mode)
     }
 
     /* Init the shadow memory allocation if the user hasn't done so */
-    old_pages = d->arch.paging.total_pages;
-    if ( old_pages < sh_min_allocation(d) )
+    if ( d->arch.paging.total_pages < sh_min_allocation(d) )
     {
         paging_lock(d);
         rv = shadow_set_allocation(d, 1024, NULL); /* Use at least 4MB */
@@ -2283,7 +2281,7 @@ void shadow_teardown(struct domain *d, bool *preempted)
     }
 #endif /* (SHADOW_OPTIMIZATIONS & (SHOPT_VIRTUAL_TLB|SHOPT_OUT_OF_SYNC)) */
 
-    if ( d->arch.paging.total_pages != 0 )
+    if ( d->arch.paging.total_pages != 0UL )
     {
         /* Destroy all the shadows and release memory to domheap */
         shadow_set_allocation(d, 0, preempted);
@@ -2295,7 +2293,7 @@ void shadow_teardown(struct domain *d, bool *preempted)
         if (d->arch.paging.shadow.hash_table)
             shadow_hash_teardown(d);
 
-        ASSERT(d->arch.paging.total_pages == 0);
+        ASSERT(d->arch.paging.total_pages == 0UL);
     }
 
     /* Free the non-paged-vcpus pagetable; must happen after we've
@@ -2410,7 +2408,7 @@ static int shadow_one_bit_disable(struct domain *d, u32 mode)
     {
         /* Get this domain off shadows */
         SHADOW_PRINTK("un-shadowing of domain %u starts."
-                       "  Shadow pages total = %u, free = %u, p2m=%u\n",
+                       "  Shadow pages total = %lu, free = %lu, p2m=%lu\n",
                        d->domain_id, d->arch.paging.total_pages,
                        d->arch.paging.free_pages, d->arch.paging.p2m_pages);
         for_each_vcpu(d, v)
@@ -2441,7 +2439,7 @@ static int shadow_one_bit_disable(struct domain *d, u32 mode)
             BUG(); /* In fact, we will have BUG()ed already */
         shadow_hash_teardown(d);
         SHADOW_PRINTK("un-shadowing of domain %u done."
-                       "  Shadow pages total = %u, free = %u, p2m=%u\n",
+                       "  Shadow pages total = %lu, free = %lu, p2m=%lu\n",
                        d->domain_id, d->arch.paging.total_pages,
                        d->arch.paging.free_pages, d->arch.paging.p2m_pages);
     }
@@ -2573,7 +2571,9 @@ int shadow_domctl(struct domain *d,
             paging_unlock(d);
             return -EINVAL;
         }
-        rc = shadow_set_allocation(d, sc->mb << (20 - PAGE_SHIFT), &preempted);
+        rc = shadow_set_allocation(d,
+                                   (unsigned long)sc->mb << (20 - PAGE_SHIFT),
+                                   &preempted);
         paging_unlock(d);
         if ( preempted )
             /* Not finished.  Set up to re-run the call. */

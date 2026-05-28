@@ -310,7 +310,7 @@ void paging_dump_vcpu_info(struct vcpu *v);
  * Input might be rounded up to at minimum amount of pages, plus
  * space for the p2m table.
  * Returns 0 for success, non-zero for failure. */
-int paging_set_allocation(struct domain *d, unsigned int pages,
+int paging_set_allocation(struct domain *d, unsigned long pages,
                           bool *preempted);
 
 /* Is gfn within maxphysaddr for the domain? */

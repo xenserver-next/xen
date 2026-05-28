@@ -327,18 +327,18 @@ static void cf_check hap_free_p2m_page(struct domain *d, struct page_info *pg)
 }
 
 /* Return the size of the pool, rounded up to the nearest MB */
-unsigned int hap_get_allocation(struct domain *d)
+unsigned long hap_get_allocation(struct domain *d)
 {
-    unsigned int pg = d->arch.paging.total_pages
+    unsigned long pg = d->arch.paging.total_pages
         + d->arch.paging.p2m_pages;
 
     return ((pg >> (20 - PAGE_SHIFT))
-            + ((pg & ((1 << (20 - PAGE_SHIFT)) - 1)) ? 1 : 0));
+            + ((pg & ((1UL << (20 - PAGE_SHIFT)) - 1)) ? 1 : 0));
 }
 
 /* Set the pool of pages to the required number of pages.
  * Returns 0 for success, non-zero for failure. */
-int hap_set_allocation(struct domain *d, unsigned int pages, bool *preempted)
+int hap_set_allocation(struct domain *d, unsigned long pages, bool *preempted)
 {
     struct page_info *pg;
 
@@ -456,7 +456,6 @@ void hap_domain_init(struct domain *d)
 /* return 0 for success, -errno for failure */
 int hap_enable(struct domain *d, u32 mode)
 {
-    unsigned int old_pages;
     unsigned int i;
     int rv = 0;
 
@@ -469,8 +468,7 @@ int hap_enable(struct domain *d, u32 mode)
 
     domain_pause(d);
 
-    old_pages = d->arch.paging.total_pages;
-    if ( old_pages == 0 )
+    if ( d->arch.paging.total_pages == 0UL )
     {
         paging_lock(d);
         rv = hap_set_allocation(d, 256, NULL);
@@ -623,14 +621,14 @@ void hap_teardown(struct domain *d, bool *preempted)
 
     paging_lock(d); /* Keep various asserts happy */
 
-    if ( d->arch.paging.total_pages != 0 )
+    if ( d->arch.paging.total_pages != 0UL )
     {
         hap_set_allocation(d, 0, preempted);
 
         if ( preempted && *preempted )
             goto out;
 
-        ASSERT(d->arch.paging.total_pages == 0);
+        ASSERT(d->arch.paging.total_pages == 0UL);
     }
 
     d->arch.paging.mode &= ~PG_log_dirty;
@@ -651,7 +649,8 @@ int hap_domctl(struct domain *d, struct xen_domctl_shadow_op *sc,
     {
     case XEN_DOMCTL_SHADOW_OP_SET_ALLOCATION:
         paging_lock(d);
-        rc = hap_set_allocation(d, sc->mb << (20 - PAGE_SHIFT), &preempted);
+        rc = hap_set_allocation(d, (unsigned long)sc->mb << (20 - PAGE_SHIFT),
+                                &preempted);
         paging_unlock(d);
         if ( preempted )
             /* Not finished.  Set up to re-run the call. */

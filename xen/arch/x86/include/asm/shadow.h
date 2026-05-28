@@ -91,7 +91,7 @@ void shadow_blow_tables_per_domain(struct domain *d);
  * Input will be rounded up to at least shadow_min_acceptable_pages(),
  * plus space for the p2m table.
  * Returns 0 for success, non-zero for failure. */
-int shadow_set_allocation(struct domain *d, unsigned int pages,
+int shadow_set_allocation(struct domain *d, unsigned long pages,
                           bool *preempted);
 
 /* Helper to invoke for deferred releasing of a top-level shadow's reference. */
