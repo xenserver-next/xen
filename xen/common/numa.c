@@ -743,7 +743,7 @@ static void cf_check dump_numa(unsigned char key)
 
         process_pending_softirqs();
 
-        printk("%pd (total: %u):\n", d, domain_tot_pages(d));
+        printk("%pd (total: %lu):\n", d, domain_tot_pages(d));
 
         memset(page_num_node, 0, sizeof(page_num_node));
 

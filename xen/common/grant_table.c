@@ -2396,7 +2396,7 @@ gnttab_transfer(
                          e->domain_id);
             else
                 gdprintk(XENLOG_INFO,
-                         "Transferee %pd has no headroom (tot %u, max %u, ex %u)\n",
+                         "Transferee %pd has no headroom (tot %lu, max %lu, ex %lu)\n",
                          e, domain_tot_pages(e), e->max_pages, e->extra_pages);
 
             gop.status = GNTST_general_error;

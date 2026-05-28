@@ -1270,7 +1270,7 @@ p2m_pod_demand_populate(struct p2m_domain *p2m, gfn_t gfn,
 out_of_memory:
     pod_unlock_and_flush(p2m);
 
-    printk("%s: Dom%d out of PoD memory! (tot=%"PRIu32" ents=%ld dom%d)\n",
+    printk("%s: Dom%d out of PoD memory! (tot=%lu ents=%lu dom%d)\n",
            __func__, d->domain_id, domain_tot_pages(d),
            p2m->pod.entry_count, current->domain->domain_id);
     domain_crash(d);

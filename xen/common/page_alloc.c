@@ -2892,11 +2892,11 @@ int assign_pages(
     }
     else if ( !(memflags & MEMF_no_refcount) )
     {
-        unsigned int tot_pages = domain_tot_pages(d);
+        unsigned long tot_pages = domain_tot_pages(d);
 
         if ( unlikely(tot_pages > d->max_pages) )
         {
-            gprintk(XENLOG_INFO, "Inconsistent allocation for %pd: %u > %u\n",
+            gprintk(XENLOG_INFO, "Inconsistent allocation for %pd: %lu > %lu\n",
                     d, tot_pages, d->max_pages);
             rc = -EPERM;
             goto out;
@@ -2904,7 +2904,7 @@ int assign_pages(
 
         if ( unlikely(nr > d->max_pages - tot_pages) )
         {
-            gprintk(XENLOG_INFO, "Over-allocation for %pd: %Lu > %u\n",
+            gprintk(XENLOG_INFO, "Over-allocation for %pd: %Lu > %lu\n",
                     d, tot_pages + 0ULL + nr, d->max_pages);
             rc = -E2BIG;
             goto out;
@@ -2916,7 +2916,7 @@ int assign_pages(
         if ( unlikely(d->tot_pages + nr < nr) )
         {
             gprintk(XENLOG_INFO,
-                    "Excess allocation for %pd: %Lu (%u extra)\n",
+                    "Excess allocation for %pd: %Lu (%lu extra)\n",
                     d, d->tot_pages + 0ULL + nr, d->extra_pages);
             if ( pg[0].count_info & PGC_extra )
                 d->extra_pages -= nr;
