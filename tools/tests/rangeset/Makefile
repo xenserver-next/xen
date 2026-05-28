@@ -6,9 +6,9 @@ TARGET := test-rangeset
 .PHONY: all
 all: $(TARGET)
 
-.PHONY: run
-run: $(TARGET)
-	./$<
+.PHONY: run test
+run test: $(TARGET)
+	$(call RUN_TARGETS_IF_CC_IS_HOSTCC)
 
 .PHONY: clean
 clean:

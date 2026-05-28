@@ -92,6 +92,7 @@ build-docs:
 .PHONY: test
 test:
 	$(MAKE) -C tools/python test
+	$(MAKE) -C tools/tests test
 
 run-tests-%: build-tools-public-headers tools/tests/%/
 	$(MAKE) -C tools/tests/$* run

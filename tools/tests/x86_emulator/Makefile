@@ -7,9 +7,9 @@ TARGET := test_x86_emulator
 .PHONY: all
 all:
 
-.PHONY: run
-run: $(TARGET)
-	./$(TARGET)
+.PHONY: run test
+run test: $(TARGET)
+	$(call RUN_TARGETS_IF_CC_IS_HOSTCC)
 
 # Add the core emulator to the build
 vpath x86_emulate/%.c $(XEN_ROOT)/xen/arch/x86
