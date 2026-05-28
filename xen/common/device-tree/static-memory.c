@@ -11,7 +11,7 @@ static bool __init append_static_memory_to_bank(struct domain *d,
                                                 paddr_t size)
 {
     int res;
-    unsigned int nr_pages = PFN_DOWN(size);
+    unsigned long nr_pages = PFN_DOWN(size);
     gfn_t sgfn;
 
     /*

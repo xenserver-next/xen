@@ -592,7 +592,7 @@ static int __init alloc_xenstore_page(struct domain *d)
     gfn_t gfn;
     int rc;
 
-    if ( (UINT_MAX - d->max_pages) < 1 )
+    if ( (ULONG_MAX - d->max_pages) < 1 )
     {
         printk(XENLOG_ERR "%pd: Over-allocation for d->max_pages by 1 page.\n",
                d);

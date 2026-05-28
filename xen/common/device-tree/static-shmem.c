@@ -96,7 +96,7 @@ static mfn_t __init acquire_shared_memory_bank(struct domain *d,
      * into domain_tot_pages().
      */
     nr_pfns = PFN_DOWN(psize);
-    if ( (UINT_MAX - d->max_pages) < nr_pfns )
+    if ( (ULONG_MAX - d->max_pages) < nr_pfns )
     {
         printk(XENLOG_ERR "%pd: Over-allocation for d->max_pages: %lu.\n",
                d, nr_pfns);
@@ -313,7 +313,6 @@ int __init process_shm(struct domain *d, struct kernel_info *kinfo,
         uint32_t addr_cells;
         paddr_t gbase, pbase, psize;
         int ret = 0;
-        unsigned int i;
         const char *role_str;
         const char *shm_id;
 
@@ -362,11 +361,11 @@ int __init process_shm(struct domain *d, struct kernel_info *kinfo,
                 return -EINVAL;
             }
 
-            for ( i = 0; i < PFN_DOWN(psize); i++ )
-                if ( !mfn_valid(mfn_add(maddr_to_mfn(pbase), i)) )
+            for ( unsigned long page = 0; page < PFN_DOWN(psize); page++ )
+                if ( !mfn_valid(mfn_add(maddr_to_mfn(pbase), page)) )
                 {
                     printk("%pd: invalid physical address 0x%"PRI_mfn"\n",
-                        d, mfn_x(mfn_add(maddr_to_mfn(pbase), i)));
+                           d, mfn_x(mfn_add(maddr_to_mfn(pbase), page)));
                     return -EINVAL;
                 }
 

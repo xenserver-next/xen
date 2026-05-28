@@ -348,7 +348,7 @@ guest_physmap_add_page(struct domain *d, gfn_t gfn, mfn_t mfn,
 static inline int guest_physmap_add_pages(struct domain *d,
                                           gfn_t gfn,
                                           mfn_t mfn,
-                                          unsigned int nr_pages)
+                                          unsigned long nr_pages)
 {
     return p2m_insert_mapping(d, gfn, nr_pages, mfn, p2m_ram_rw);
 }
