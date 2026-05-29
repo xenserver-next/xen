@@ -1,0 +1,22 @@
+xen/mm: Normalize per-domain page counters, >16 TiB per domain
+
+Summary of a comment by Jan Beulich motivating this submission:
+> Considering that systems (and hence guests) only ever get larger, we
+> should consider to normalize per-domain page counters to unsigned long.
+
+This series enables supporting guests >16 TiB in the future
+once the system support for machines >16 TiB is implemented.
+
+1. xen/mm: Normalize common per-domain page counters to unsigned long
+2. x86/mm: Normalize X86 per-domain page counters to unsigned long
+3. xen/mm: Static memory: Widen assign_pages(nr) to unsigned long
+4. xen/mm: Static memory: Widen domstatic plumbing to unsigned long
+5. xen/mm: device-tree: Widen static page counts to unsigned long
+6. xen/arch/x86/dom0_build.c: Extend the upper limit for Dom0's max_pages
+7. tools/libs/stat/xenstat.c: Extend the "no maximum" sentinel for max_pages
+
+This series is based on the NUMA claim sets v7 series:
+https://lists.xen.org/archives/html/xen-devel/2026-05/msg00363.html
+
+Suggested-by: Jan Beulich <jbeulich@suse.com>
+Signed-off-by: Bernhard Kaindl <bernhard.kaindl@citrix.com>
