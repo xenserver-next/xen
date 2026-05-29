@@ -1,0 +1,117 @@
+xen/mm: avoid watchdog timeout in dump_numa() on large domains
+
+Using the 'u' debug key invokes dump_numa(), which walks each domain's
+page list under page_alloc_lock to compute per-NUMA-node counts. On
+domains with many pages, this O(pages) operation can hold the lock long
+enough to trigger a watchdog timeout.
+
+Replace the page-list walk with node_tot_pages[], a per-node counter
+maintained in struct domain. This reduces dump_numa()'s per-domain work
+from O(pages) to O(nodes).
+
+Accounting via domain_adjust_tot_pages()
+
+Most page-count updates flow through domain_adjust_tot_pages(). The
+helper takes the affected NUMA node and updates both tot_pages and
+node_tot_pages[node] in the same locked critical section.
+
+A debug-only helper, assert_numa_page_count(), checks after each locked
+update that the node totals sum to tot_pages.
+
+Accounting in memory_exchange()
+
+memory_exchange() cannot use the same helper. It is preemptible, may
+fail and roll back part way through a chunk, and does not hold
+page_alloc_lock for the whole operation. The final success-path value of
+tot_pages is unchanged: by construction, the number of input pages stolen
+equals the number of output pages assigned. domain_commit_page_deltas()
+still applies the accumulated deltas to tot_pages, but their sum is zero.
+
+Instead, it accumulates deferred per-node deltas in
+node_tot_pages_adjustments[] for the current chunk:
+
+  When steal_page() is called with MEMF_no_refcount, tot_pages is
+  intentionally not decremented. A decrement of 1 is recorded for the
+  input page's node.
+
+  When assign_page() is called with MEMF_no_refcount, tot_pages is
+  intentionally not incremented. An increment equal to the number of
+  pages in the output extent is recorded.
+
+At the end of a successful chunk, these deltas are committed under
+page_alloc_lock. The net tot_pages delta is zero, while node_tot_pages[]
+is updated to reflect the NUMA-node movement.
+
+Correctness on failure paths:
+
+  Invariant 1: Pages allocated with MEMF_no_owner are not counted in
+  tot_pages until assign_page() succeeds. Freeing such pages with
+  free_domheap_pages() is therefore accounting-neutral.
+
+  Invariant 2: Pages stolen with MEMF_no_refcount remain counted in
+  tot_pages until the deferred adjustment is committed. No window
+  exists in which a stolen page is absent from d->page_list and
+  already subtracted from tot_pages.
+
+These invariants cover the failure cases:
+
+  Input-side failure before output allocation: any input pages already
+  stolen are still on in_chunk_list. The fail path attempts to assign them
+  back to the domain. A successful reassign cancels the earlier negative
+  delta; if the reassign fails because the domain is dying, the negative
+  delta remains and is committed, reflecting that the page has been freed.
+
+  OOM during output allocation (alloc_domheap_pages() returns NULL):
+  output pages already allocated before the failure are on out_chunk_list,
+  have no owner, and have never been counted in tot_pages. Freeing them
+  does not change accounting. Stolen input pages are handled as above:
+  reassignment cancels their negative deltas, while unreassigned pages are
+  deducted because the domain is dying.
+
+  assign_page() failure because the domain is dying: output pages
+  assigned before the failure remain accounted to the domain and are
+  reclaimed later by domain_relinquish_resources(). The accumulated
+  deltas therefore contain positive entries for the successful output
+  assignments and negative entries for all stolen input pages.
+  Committing the net delta to both tot_pages and node_tot_pages[] leaves
+  the accounting consistent with the pages the domain still owns.
+
+  Post-assignment failure in guest_physmap_add_page() or while copying the
+  new frame number back to the guest: at this point the output extent has
+  already been assigned to the domain and the input pages for the chunk
+  have already been freed. Input and output page counts are therefore
+  equal, so the committed update only redistributes per-node counts and
+  leaves tot_pages unchanged.
+
+A functionally equivalent version of this change is included in the
+XenServer 9 pre-release and is widely exercised there. Debug Xen
+builds with the added consistency checks are also used in internal
+end-to-end regression testing (XenRT). For upstream submission, the
+change was additionally updated to support non-NUMA Xen builds and
+reviewed again for correctness, including the failure paths.
+
+Fixes: 4dff228603ba ("Walking the page lists needs the page_alloc lock")
+Signed-off-by: Alejandro Vallejo <alejandro.garciavallejo@amd.com>
+Signed-off-by: Marcus Granado <marcus.granado@citrix.com>
+Signed-off-by: Roger Pau Monné <roger.pau@citrix.com>
+Signed-off-by: Andrew Cooper <andrew.cooper3@citrix.com>
+Signed-off-by: Bernhard Kaindl <bernhard.kaindl@citrix.com>
+---
+Brief history of this code base: Work was started by Marcus Granado,
+adding per-node accounting to domain_adjust_tot_pages() using work
+by Alejandro Vallejo <alejandro.garciavallejo@amd.com> as basis.
+
+In a 2nd phase, Bernhard Kaindl and Roger Pau Monné implemented
+accumulating of per-node deltas in memory_exchange(), including
+handling across failure paths and consistency checks of the page
+counters after each update with CONFIG_DEBUG enabled. Bernhard
+updated dump_numa() to replace walking d->page_list under lock
+and Roger fixed handling of hypercall preemption. Andrew Cooper
+participated in this phase as well and Joash Robinson tested using
+end-to-end tests exercising debug-key 'u' and checking its output.
+
+In a 3rd phase, Bernhard Kaindl added explanatory comments, prepared
+this commit message for review, fixed a failure path that can occur
+when memory_exchange() fails mid-exchange due to OOM, fixed the code
+for non-NUMA builds and consolidated loops that apply accumulated
+deltas into a single helper.
