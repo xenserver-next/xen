@@ -2851,12 +2851,12 @@ void init_domheap_pages(paddr_t ps, paddr_t pe)
 
 int assign_pages(
     struct page_info *pg,
-    unsigned int nr,
+    unsigned long nr,
     struct domain *d,
     unsigned int memflags)
 {
     int rc = 0;
-    unsigned int i;
+    unsigned long i;
 
     nrspin_lock(&d->page_alloc_lock);
 
@@ -2870,7 +2870,7 @@ int assign_pages(
 
 #ifndef NDEBUG
     {
-        unsigned int extra_pages = 0;
+        unsigned long extra_pages = 0;
 
         for ( i = 0; i < nr; i++ )
         {
@@ -2947,7 +2947,7 @@ int assign_pages(
 int assign_page(struct page_info *pg, unsigned int order, struct domain *d,
                 unsigned int memflags)
 {
-    return assign_pages(pg, 1U << order, d, memflags);
+    return assign_pages(pg, 1UL << order, d, memflags);
 }
 
 struct page_info *alloc_domheap_pages(

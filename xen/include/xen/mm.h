@@ -168,7 +168,7 @@ void heap_init_late(void);
 
 int assign_pages(
     struct page_info *pg,
-    unsigned int nr,
+    unsigned long nr,
     struct domain *d,
     unsigned int memflags);
 
