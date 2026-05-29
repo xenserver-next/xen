@@ -3368,7 +3368,7 @@ static struct page_info * __init acquire_staticmem_pages(mfn_t smfn,
 }
 
 static int assign_domstatic_pages(struct domain *d, struct page_info *pg,
-                                  unsigned int nr_mfns, unsigned int memflags)
+                                  unsigned long nr_mfns, unsigned int memflags)
 {
     if ( !d || (memflags & (MEMF_no_owner | MEMF_no_refcount)) )
     {
@@ -3391,7 +3391,7 @@ static int assign_domstatic_pages(struct domain *d, struct page_info *pg,
  * then assign them to one specific domain #d.
  */
 int __init acquire_domstatic_pages(struct domain *d, mfn_t smfn,
-                                   unsigned int nr_mfns, unsigned int memflags)
+                                   unsigned long nr_mfns, unsigned int memflags)
 {
     struct page_info *pg;
 

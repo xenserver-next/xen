@@ -46,13 +46,6 @@ static mfn_t __init acquire_static_memory_bank(struct domain *d,
 
     device_tree_get_reg(cell, addr_cells, size_cells, pbase, psize);
     ASSERT(IS_ALIGNED(*pbase, PAGE_SIZE) && IS_ALIGNED(*psize, PAGE_SIZE));
-    if ( PFN_DOWN(*psize) > UINT_MAX )
-    {
-        printk(XENLOG_ERR "%pd: static memory size too large: %#"PRIpaddr,
-               d, *psize);
-        return INVALID_MFN;
-    }
-
     smfn = maddr_to_mfn(*pbase);
     res = acquire_domstatic_pages(d, smfn, PFN_DOWN(*psize), 0);
     if ( res )

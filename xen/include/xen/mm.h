@@ -107,7 +107,7 @@ bool scrub_free_pages(void);
 void unprepare_staticmem_pages(struct page_info *pg, unsigned long nr_mfns,
                                bool need_scrub);
 void free_domstatic_page(struct page_info *page);
-int acquire_domstatic_pages(struct domain *d, mfn_t smfn, unsigned int nr_mfns,
+int acquire_domstatic_pages(struct domain *d, mfn_t smfn, unsigned long nr_mfns,
                             unsigned int memflags);
 
 /* Map machine page range in Xen virtual address space. */
