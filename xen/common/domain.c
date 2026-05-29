@@ -1558,6 +1558,15 @@ void domain_destroy(struct domain *d)
     /* Remove from the domlist/hash. */
     domlist_remove(d);
 
+    /*
+     * Final invariant check: all pages still owned by the dying domain must
+     * be accounted for per-node before complete_domain_destroy() reclaims
+     * them.  Debug-only; expands to a no-op in production builds.
+     */
+    nrspin_lock(&d->page_alloc_lock);
+    assert_numa_page_count(d);
+    nrspin_unlock(&d->page_alloc_lock);
+
     /* Schedule RCU asynchronous completion of domain destroy. */
     call_rcu(&d->rcu, complete_domain_destroy);
 }

@@ -68,6 +68,7 @@
 #include <xen/types.h>
 #include <xen/list.h>
 #include <xen/spinlock.h>
+#include <xen/numa.h>
 #include <xen/perfc.h>
 #include <public/memory.h>
 
@@ -131,7 +132,16 @@ mfn_t xen_map_to_mfn(unsigned long va);
 int populate_pt_range(unsigned long virt, unsigned long nr_mfns);
 /* Claim handling */
 unsigned long __must_check domain_adjust_tot_pages(struct domain *d,
-    long pages);
+                                                   nodeid_t node, long pages);
+/*
+ * Commit accumulated per-node page deltas to d->tot_pages and (under NUMA)
+ * d->node_tot_pages[] under page_alloc_lock.  Applied entries are cleared
+ * so the same accumulator can be reused for the next batch.  Returns the
+ * post-commit value of d->tot_pages; callers that may be releasing the last
+ * reference on the domain should drop it when the return value is zero.
+ */
+unsigned long domain_commit_page_deltas(struct domain *d,
+                                        long adjustments[MAX_NUMNODES]);
 int domain_set_claim_entries(struct domain *d, uint32_t nr_entries,
                              const struct xen_memory_claim *claim_set);
 int domain_get_claim_entries(struct domain *d, uint32_t *nr_entries,

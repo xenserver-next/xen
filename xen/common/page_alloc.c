@@ -520,12 +520,43 @@ static unsigned long avail_heap_pages(
     return free_pages;
 }
 
-unsigned long domain_adjust_tot_pages(struct domain *d, long pages)
+unsigned long domain_adjust_tot_pages(struct domain *d, nodeid_t node,
+                                      long pages)
 {
     ASSERT(rspin_is_locked(&d->page_alloc_lock));
     d->tot_pages += pages;
 
+#ifdef CONFIG_NUMA
+    ASSERT(node != NUMA_NO_NODE);
+    ASSERT(node_online(node));
+    d->node_tot_pages[node] += pages;
+    assert_numa_page_count(d);
+#endif
+
     return d->tot_pages;
+}
+
+unsigned long domain_commit_page_deltas(struct domain *d,
+                                        long adjustments[MAX_NUMNODES])
+{
+    unsigned long tot_pages;
+    nodeid_t node;
+
+    nrspin_lock(&d->page_alloc_lock);
+    for_each_online_node ( node )
+        if ( adjustments[node] )
+        {
+#ifdef CONFIG_NUMA
+            d->node_tot_pages[node] += adjustments[node];
+#endif
+            d->tot_pages += adjustments[node];
+            adjustments[node] = 0;
+        }
+    assert_numa_page_count(d);
+    tot_pages = d->tot_pages;
+    nrspin_unlock(&d->page_alloc_lock);
+
+    return tot_pages;
 }
 
 #ifdef CONFIG_SYSCTL
@@ -2924,7 +2955,7 @@ int assign_pages(
             goto out;
         }
 
-        if ( unlikely(domain_adjust_tot_pages(d, nr) == nr) )
+        if ( unlikely(domain_adjust_tot_pages(d, page_to_nid(pg), nr) == nr) )
             get_knownalive_domain(d);
     }
 
@@ -3066,7 +3097,8 @@ void free_domheap_pages(struct page_info *pg, unsigned int order)
                 }
             }
 
-            drop_dom_ref = !domain_adjust_tot_pages(d, -(1 << order));
+            drop_dom_ref = !domain_adjust_tot_pages(d, page_to_nid(pg),
+                                                    -(1 << order));
 
             rspin_unlock(&d->page_alloc_lock);
 
@@ -3274,7 +3306,7 @@ void free_domstatic_page(struct page_info *page)
 
     arch_free_heap_page(d, page);
 
-    drop_dom_ref = !domain_adjust_tot_pages(d, -1);
+    drop_dom_ref = !domain_adjust_tot_pages(d, page_to_nid(page), -1);
 
     unprepare_staticmem_pages(page, 1, scrub_debug);
 

@@ -673,6 +673,14 @@ static long memory_exchange(XEN_GUEST_HANDLE_PARAM(xen_memory_exchange_t) arg)
     struct domain *d;
     struct page_info *page;
 
+    /*
+     * Deferred accounting for the current exchange chunk.  Keep it at
+     * function scope because the fail: path also needs to commit or cancel
+     * partial work.  domain_commit_page_deltas() clears applied entries, so
+     * each new chunk starts with a zeroed accumulator.
+     */
+    long node_tot_pages_adjustments[MAX_NUMNODES] = {};
+
     if ( copy_from_guest(&exch, arg, 1) )
         return -EFAULT;
 
@@ -822,6 +830,12 @@ static long memory_exchange(XEN_GUEST_HANDLE_PARAM(xen_memory_exchange_t) arg)
                 }
 
                 page_list_add(page, &in_chunk_list);
+                /*
+                 * steal_page() with MEMF_no_refcount removes ownership but
+                 * leaves the domain page counts unchanged; record the
+                 * deferred -1 for this page's node.
+                 */
+                node_tot_pages_adjustments[page_to_nid(page)]--;
 #ifdef CONFIG_X86
                 put_gfn(d, gmfn + k);
 #endif
@@ -870,31 +884,30 @@ static long memory_exchange(XEN_GUEST_HANDLE_PARAM(xen_memory_exchange_t) arg)
             if ( assign_page(page, exch.out.extent_order, d,
                              MEMF_no_refcount) )
             {
-                unsigned long dec_count;
-                bool drop_dom_ref;
-
                 /*
-                 * Pages in in_chunk_list is stolen without
-                 * decreasing the tot_pages. If the domain is dying when
-                 * assign pages, we need decrease the count. For those pages
-                 * that has been assigned, it should be covered by
-                 * domain_relinquish_resources().
+                 * Input pages for this chunk were stolen and freed without
+                 * decreasing tot_pages.  Output extents already assigned
+                 * before this failure will be released later by
+                 * domain_relinquish_resources().  Commit the relative deltas
+                 * now so concurrent reservation changes made under
+                 * page_alloc_lock are preserved.  The net delta is strictly
+                 * negative on this branch, so a zero post-commit tot_pages
+                 * means the last reference must be dropped.
                  */
-                dec_count = (((1UL << exch.in.extent_order) *
-                              (1UL << in_chunk_order)) -
-                             (j * (1UL << exch.out.extent_order)));
-
-                nrspin_lock(&d->page_alloc_lock);
-                drop_dom_ref = (dec_count &&
-                                !domain_adjust_tot_pages(d, -dec_count));
-                nrspin_unlock(&d->page_alloc_lock);
-
-                if ( drop_dom_ref )
+                if ( !domain_commit_page_deltas(d, node_tot_pages_adjustments) )
                     put_domain(d);
 
                 free_domheap_pages(page, exch.out.extent_order);
                 goto dying;
             }
+
+            /*
+             * assign_page() with MEMF_no_refcount gives ownership without
+             * updating the domain page counts; record the deferred extent
+             * size for this output node.
+             */
+            node_tot_pages_adjustments[page_to_nid(page)] +=
+                1UL << exch.out.extent_order;
 
             if ( __copy_from_guest_offset(&gpfn, exch.out.extent_start,
                                           (i << out_chunk_order) + j, 1) )
@@ -915,8 +928,19 @@ static long memory_exchange(XEN_GUEST_HANDLE_PARAM(xen_memory_exchange_t) arg)
         }
         BUG_ON( !(d->is_dying) && (j != (1UL << out_chunk_order)) );
 
+        /*
+         * If publishing output GFNs failed after assignment, fail: still
+         * needs to commit the zero-net per-node redistribution.
+         */
         if ( rc )
             goto fail;
+
+        /*
+         * Success: commit the per-node redistribution.  The helper also
+         * applies the deltas to tot_pages; the final value is unchanged
+         * because the exchange is size-neutral.
+         */
+        domain_commit_page_deltas(d, node_tot_pages_adjustments);
     }
 
     exch.nr_exchanged = exch.in.nr_extents;
@@ -925,22 +949,31 @@ static long memory_exchange(XEN_GUEST_HANDLE_PARAM(xen_memory_exchange_t) arg)
     rcu_unlock_domain(d);
     return rc;
 
-    /*
-     * Failed a chunk! Free any partial chunk work. Tell caller how many
-     * chunks succeeded.
-     */
+    /* Failed a chunk.  Free partial work and report completed chunks. */
  fail:
     /*
      * Reassign any input pages we managed to steal.  NB that if the assign
      * fails again, we're on the hook for freeing the page, since we've already
-     * cleared PGC_allocated.
+     * cleared PGC_allocated.  A successful reassignment cancels the -1 that
+     * was recorded when the page was stolen.
      */
     while ( (page = page_list_remove_head(&in_chunk_list)) )
+    {
         if ( assign_pages(page, 1, d, MEMF_no_refcount) )
         {
             BUG_ON(!d->is_dying);
             free_domheap_page(page);
         }
+        else
+            node_tot_pages_adjustments[page_to_nid(page)] += 1;
+    }
+
+    /*
+     * Commit remaining deltas.  If all stolen pages were reassigned, this is
+     * a zero-net update.  Otherwise the domain is dying and unreassigned
+     * pages are deducted.
+     */
+    domain_commit_page_deltas(d, node_tot_pages_adjustments);
 
  dying:
     rcu_unlock_domain(d);
