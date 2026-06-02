@@ -71,6 +71,7 @@
 
 #include <public/arch-x86/cpuid.h>
 #include <public/hvm/hvm_vcpu.h>
+#include <public/sched.h>
 #include <public/sysctl.h>
 
 #ifdef CONFIG_COMPAT
@@ -981,8 +982,36 @@ void arch_domain_destroy(struct domain *d)
     psr_domain_free(d);
 }
 
+static void hvm_nested_shutdown_cleanup(struct domain *d)
+{
+    struct vcpu *v;
+
+    if ( !is_hvm_domain(d) || !nestedhvm_enabled(d) ||
+         d->shutdown_code == SHUTDOWN_suspend )
+        return;
+
+    /*
+     * Guests can power off while still advertising nested-virt state.
+     * Mirror the existing EFER.SVME-clear side effects so nested p2m state
+     * doesn't survive into teardown and pin the domain in dying state.
+     */
+    p2m_flush_nestedp2m(d);
+
+    for_each_vcpu ( d, v )
+    {
+        if ( v->arch.hvm.guest_efer & EFER_SVME )
+        {
+            nestedhvm_vcpu_reset(v);
+            v->arch.hvm.guest_efer &= ~EFER_SVME;
+            hvm_update_guest_efer(v);
+        }
+    }
+}
+
 void arch_domain_shutdown(struct domain *d)
 {
+    hvm_nested_shutdown_cleanup(d);
+
     if ( is_viridian_domain(d) )
         viridian_time_domain_freeze(d);
 }

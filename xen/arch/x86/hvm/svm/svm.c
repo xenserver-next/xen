@@ -1811,7 +1811,10 @@ static int cf_check svm_msr_read_intercept(
         break;
 
     case MSR_K8_VM_HSAVE_PA:
-        *msr_content = nsvm->ns_msr_hsavepa;
+        /* Don't expose Xen's internal invalid-address sentinel to the guest. */
+        *msr_content = (nsvm->ns_msr_hsavepa == INVALID_PADDR)
+                     ? 0
+                     : nsvm->ns_msr_hsavepa;
         break;
 
     case MSR_AMD_OSVW_ID_LENGTH:
