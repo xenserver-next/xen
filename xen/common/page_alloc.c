@@ -1392,10 +1392,10 @@ static struct page_info *alloc_heap_pages(
 static int reserve_offlined_page(struct page_info *head)
 {
     unsigned int node = page_to_nid(head);
-    int zone = page_to_zone(head), i, head_order = PFN_ORDER(head), count = 0;
-    struct page_info *cur_head;
+    int zone = page_to_zone(head), count = 0;
     struct domain *d;
-    unsigned int cur_order, first_dirty;
+    struct page_info *cur_head;
+    unsigned int first_dirty, head_order = PFN_ORDER(head);
 
     ASSERT(spin_is_locked(&heap_lock));
 
@@ -1414,8 +1414,7 @@ static int reserve_offlined_page(struct page_info *head)
 
     while ( cur_head < (head + (1 << head_order)) )
     {
-        struct page_info *pg;
-        int next_order;
+        struct page_info *end;
 
         if ( page_state_is(cur_head, offlined) )
         {
@@ -1425,52 +1424,40 @@ static int reserve_offlined_page(struct page_info *head)
             continue;
         }
 
-        next_order = cur_order = 0;
+        /* Find the next contiguous run of healthy pages within the buddy. */
+        end = cur_head;
+        while ( ++end < (head + (1 << head_order)) &&
+                !page_state_is(end, offlined) )
+            ;
 
-        /* Attempt to grow the order (size) of the buddy as much as possible. */
-        while ( cur_order < head_order )
+        /* Re-add the healthy runs as properly aligned power-of-2 chunks. */
+        while ( cur_head < end )
         {
-            next_order = cur_order + 1;
+            /*
+             * Pick the largest order allowed by MFN alignment, remaining span,
+             * and the original buddy size. For mfn 0, we use the buddy size.
+             */
+            unsigned long mfn = mfn_x(page_to_mfn(cur_head));
+            unsigned int cur_order = mfn ? ffs(mfn & -mfn) - 1 : head_order;
 
-            /* Do not grow to next_order if it would go beyond the buddy. */
-            if ( (cur_head + (1 << next_order)) > (head + ( 1 << head_order)) )
-                goto merge;
+            cur_order = min(cur_order, flsl(end - cur_head) - 1);
+            cur_order = min(cur_order, head_order);
 
-            /* Do not grow to next_order if cur_head is not aligned to it. */
-            if ( (mfn_x(page_to_mfn(cur_head)) & ((1UL << next_order) - 1)) )
-                goto merge;
-
-            /* Check if any page in the next_order range is offlined. */
-            for ( i = (1 << cur_order), pg = cur_head + (1 << cur_order );
-                  i < (1 << next_order);
-                  i++, pg++ )
-                if ( page_state_is(pg, offlined) )
-                    break;
-            if ( i == ( 1 << next_order) )
+            page_list_add_scrub(cur_head, node, zone, cur_order,
+                                (1U << cur_order) > first_dirty ?
+                                first_dirty : INVALID_DIRTY_IDX);
+            /*
+             * Shift first_dirty index to the start of the next chunk.
+             */
+            if ( first_dirty != INVALID_DIRTY_IDX )
             {
-                cur_order = next_order;
-                continue;
+                if ( first_dirty >= 1U << cur_order )
+                    first_dirty -= 1U << cur_order;
+                else
+                    first_dirty = 0;
             }
-            else
-            {
-            merge:
-                /* We don't consider merging outside the head_order. */
-                page_list_add_scrub(cur_head, node, zone, cur_order,
-                                    (1U << cur_order) > first_dirty ?
-                                    first_dirty : INVALID_DIRTY_IDX);
-                cur_head += (1 << cur_order);
 
-                /* Adjust first_dirty if needed. */
-                if ( first_dirty != INVALID_DIRTY_IDX )
-                {
-                    if ( first_dirty >=  1U << cur_order )
-                        first_dirty -= 1U << cur_order;
-                    else
-                        first_dirty = 0;
-                }
-
-                break;
-            }
+            cur_head += (1 << cur_order);
         }
     }
 
