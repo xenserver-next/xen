@@ -1,0 +1,16 @@
+xen/mm: Reset PFN_ORDER for offlined buddy heads
+
+This series fixes an inconsistency in the PFN_ORDER annotation for
+pages that are offlined when they are the head of a free buddy.
+
+When reserve_offlined_page() splits a buddy and moves offlined
+sub-pages to the offlined lists, the former buddy head would be
+left annotated with its original order even though it is now a
+single page. While this does not cause functional regressions,
+it is misleading.
+
+You can pull this series with the regression test environment to run it:
+$ git pull git@gitlab.com:bernhardkaindl/xen.git offline-head-order-v2
+$ make -C tools/tests/native TARGETS=offline-head-order test
+
+Signed-off-by: Bernhard Kaindl <bernhard.kaindl@citrix.com>
