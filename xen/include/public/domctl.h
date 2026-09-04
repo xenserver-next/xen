@@ -1279,12 +1279,12 @@ struct xen_domctl_get_domain_state {
     uint64_t unique_id;      /* Unique domain identifier. */
 };
 
-struct xen_domctl_claim_memory_entry {
+struct xen_domctl_memclaim_entry {
     uint64_aligned_t pages; /* Outstanding pages to claim. */
     uint32_t target;        /* NUMA node or special target constant. */
     uint32_t pad;           /* Must be zero. */
 };
-typedef struct xen_domctl_claim_memory_entry xen_domctl_claim_memory_entry_t;
+typedef struct xen_domctl_memclaim_entry xen_domctl_claim_memory_entry_t;
 DEFINE_XEN_GUEST_HANDLE(xen_domctl_claim_memory_entry_t);
 
 /* Host-wide claim, not tied to a NUMA node. */

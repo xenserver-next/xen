@@ -656,7 +656,7 @@ out:
 
 /* Validate all entries before replacing the existing claim set. */
 int domain_set_claim_entries(struct domain *d, unsigned int nr_entries,
-                             const struct xen_domctl_claim_memory_entry *claims)
+                             const struct xen_domctl_memclaim_entry *claims)
 {
     uint64_t host_request = 0, requested_pages = 0;
     nodemask_t nodes;
