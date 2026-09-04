@@ -656,7 +656,7 @@ out:
 
 /* Validate all entries before replacing the existing claim set. */
 int domain_set_claim_entries(struct domain *d, unsigned int nr_entries,
-                             const struct xen_domctl_memclaim_entry *claims)
+                             const struct xen_domctl_memclaim_entry *entries)
 {
     uint64_t host_request = 0, requested_pages = 0;
     nodemask_t nodes;
@@ -676,10 +676,10 @@ int domain_set_claim_entries(struct domain *d, unsigned int nr_entries,
     nodes_clear(nodes);
     for ( unsigned int i = 0; i < nr_entries; ++i )
     {
-        uint64_t request_pages = claims[i].pages;
-        uint32_t target = claims[i].target;
+        uint64_t request_pages = entries[i].pages;
+        uint32_t target = entries[i].target;
 
-        if ( request_pages > d->max_pages - requested_pages || claims[i].pad )
+        if ( request_pages > d->max_pages - requested_pages || entries[i].pad )
             goto out;
 
         requested_pages += request_pages;
@@ -743,13 +743,13 @@ int domain_set_claim_entries(struct domain *d, unsigned int nr_entries,
 
     for ( unsigned int i = 0; i < nr_entries; ++i )
     {
-        uint32_t target = claims[i].target;
+        uint32_t target = entries[i].target;
 
         if ( target == XEN_DOMCTL_CLAIM_MEMORY_HOST )
             continue;
 
         ASSERT(!d->claims[target]);
-        d->claims[target] = claims[i].pages;
+        d->claims[target] = entries[i].pages;
         node_claimed_pages[target] += d->claims[target];
     }
 
