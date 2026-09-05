@@ -663,6 +663,7 @@ int domain_set_claim_entries(struct domain *d, unsigned int nr_entries,
     unsigned long available;
     bool host_seen = false;
     int rc = -EINVAL;
+    typeof(*d->claims) *claims;
 
     /*
      * Locking order:
@@ -672,6 +673,7 @@ int domain_set_claim_entries(struct domain *d, unsigned int nr_entries,
      */
     nrspin_lock(&d->page_alloc_lock);
     spin_lock(&heap_lock);
+    claims = d->claims;
 
     nodes_clear(nodes);
     for ( unsigned int i = 0; i < nr_entries; ++i )
@@ -706,8 +708,8 @@ int domain_set_claim_entries(struct domain *d, unsigned int nr_entries,
 
         /* Existing claims can fund replacements on the same node. */
         available = node_avail_pages[target] - node_claimed_pages[target];
-        if ( request_pages > d->claims[target] &&
-             request_pages - d->claims[target] > available )
+        if ( request_pages > claims[target] &&
+            request_pages - claims[target] > available )
         {
             rc = -ENOMEM;
             goto out;
@@ -748,9 +750,9 @@ int domain_set_claim_entries(struct domain *d, unsigned int nr_entries,
         if ( target == XEN_DOMCTL_CLAIM_MEMORY_HOST )
             continue;
 
-        ASSERT(!d->claims[target]);
-        d->claims[target] = entries[i].pages;
-        node_claimed_pages[target] += d->claims[target];
+        ASSERT(!claims[target]);
+        claims[target] = entries[i].pages;
+        node_claimed_pages[target] += claims[target];
     }
 
     rc = 0;
