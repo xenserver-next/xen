@@ -673,28 +673,15 @@ int domain_set_claim_entries(struct domain *d, unsigned int nr_entries,
 {
     uint64_t host_request = 0, requested_pages = 0;
     nodemask_t nodes;
-    unsigned long available;
+    unsigned long available, node_requests = 0;
     bool host_seen = false;
     int rc = -EINVAL;
     typeof(d->claims) claims, free_node_claims = NULL;
     typeof(d->claims) new = xvzalloc_array(typeof(*d->claims), MAX_NUMNODES);
 
-    if ( !new )
-        return -ENOMEM;
-
-    /*
-     * Locking order:
-     * - d->page_alloc_lock: protects accesses to d->{tot_,max_,extra_}pages.
-     * - heap_lock: protects accesses to total_avail_pages, node_avail_pages,
-     *   avail[], scrub state and all total and node-specific claim counters.
-     */
     nrspin_lock(&d->page_alloc_lock);
-    spin_lock(&heap_lock);
-
-    /* Keep ownership of @new until it is attached on the success path. */
-    claims = d->claims ? : new;
-
-    nodes_clear(nodes);
+    /* Check the request itself and check it against d->max_pages */
+    /* TODO Check if domain_tot_pages check can be done here already */
     for ( unsigned int i = 0; i < nr_entries; ++i )
     {
         uint64_t request_pages = entries[i].pages;
@@ -724,6 +711,29 @@ int domain_set_claim_entries(struct domain *d, unsigned int nr_entries,
         if ( nodemask_test(target, &nodes) )
             goto out;
         node_set(target, nodes);
+        node_requests += request_pages;
+    }
+    
+    if ( !new )
+        return -ENOMEM;
+
+    /*
+     * Locking order:
+     * - d->page_alloc_lock: protects accesses to d->{tot_,max_,extra_}pages.
+     * - heap_lock: protects accesses to total_avail_pages, node_avail_pages,
+     *   avail[], scrub state and all total and node-specific claim counters.
+     */
+    //nrspin_lock(&d->page_alloc_lock);
+    spin_lock(&heap_lock);
+
+    /* Keep ownership of @new until it is attached on the success path. */
+    claims = d->claims ? : new;
+
+    nodes_clear(nodes);
+    for ( unsigned int i = 0; i < nr_entries; ++i )
+    {
+        uint64_t request_pages = entries[i].pages;
+        uint32_t target = entries[i].target;
 
         /* Existing claims can fund replacements on the same node. */
         available = node_avail_pages[target] - node_claimed_pages[target];
