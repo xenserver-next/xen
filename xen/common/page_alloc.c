@@ -144,6 +144,7 @@
 #include <asm/flushtlb.h>
 #include <asm/page.h>
 
+#include <public/domctl.h>
 #include <public/sched.h>
 #include <public/sysctl.h>
 
@@ -490,6 +491,9 @@ static DEFINE_SPINLOCK(heap_lock);
 /* Total outstanding claims by all domains */
 static unsigned long outstanding_claims;
 
+/* Sum of outstanding claims on each node. */
+static unsigned long node_claimed_pages[MAX_NUMNODES];
+
 static unsigned long avail_heap_pages(
     unsigned int zone_lo, unsigned int zone_hi, unsigned int node)
 {
@@ -519,10 +523,87 @@ unsigned long domain_adjust_tot_pages(struct domain *d, long pages)
     return d->tot_pages;
 }
 
+static void domain_release_outstanding_pages(struct domain *d,
+                                             unsigned long pages)
+{
+    ASSERT(spin_is_locked(&heap_lock));
+
+    outstanding_claims -= pages;
+    d->outstanding_pages -= pages;
+}
+
+/* Release host-wide claims without consuming a node reservation. */
+static unsigned long domain_release_host_claims(struct domain *d,
+                                                unsigned long pages)
+{
+    unsigned long claims;
+
+    ASSERT(spin_is_locked(&heap_lock));
+    ASSERT(d->outstanding_pages >= d->node_claims);
+    claims = d->outstanding_pages - d->node_claims;
+    if ( pages > claims )
+        pages = claims;
+
+    domain_release_outstanding_pages(d, pages);
+
+    return pages;
+}
+
+/* Keep the domain and system-wide node counters in step. */
+static unsigned long domain_release_node_claims(struct domain *d,
+                                                nodeid_t node,
+                                                unsigned long pages)
+{
+    ASSERT(spin_is_locked(&heap_lock));
+
+    if ( !d->node_claims )
+        return 0;
+    if ( pages > d->claims[node] )
+        pages = d->claims[node];
+
+    ASSERT(node_claimed_pages[node] >= pages);
+    ASSERT(d->node_claims >= pages);
+
+    node_claimed_pages[node] -= pages;
+    d->claims[node] -= pages;
+    d->node_claims -= pages;
+    domain_release_outstanding_pages(d, pages);
+
+    return pages;
+}
+
+/*
+ * Recall node-specific claims until @pages have been released.  This keeps
+ * domain_tot_pages(d) + d->outstanding_pages within d->max_pages when an
+ * allocation cannot be redeemed entirely from its node's claim.
+ */
+static unsigned long domain_recall_node_claims(struct domain *d,
+                                               unsigned long pages)
+{
+    unsigned long recalled = 0;
+    nodeid_t node;
+
+    ASSERT(spin_is_locked(&heap_lock));
+    /* Node offlining must release claims before changing node_online_map. */
+    for_each_online_node ( node )
+    {
+        unsigned long count;
+
+        if ( recalled == pages || !d->node_claims )
+            break;
+
+        count = domain_release_node_claims(d, node, pages - recalled);
+        recalled += count;
+    }
+
+    return recalled;
+}
+
 int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
 {
     int ret = -ENOMEM;
     unsigned long claim, avail_pages;
+    typeof(d->claims) free_node_claims = NULL;
 
     /*
      * Two locks are needed here:
@@ -536,8 +617,12 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
     /* pages==0 means "unset" the claim. */
     if ( pages == 0 )
     {
-        outstanding_claims -= d->outstanding_pages;
-        d->outstanding_pages = 0;
+        if ( d->node_claims ) {
+            domain_recall_node_claims(d, d->node_claims);
+            free_node_claims = d->claims;
+            d->claims = NULL;
+        }
+        domain_release_host_claims(d, d->outstanding_pages);
         ret = 0;
         goto out;
     }
@@ -577,7 +662,152 @@ int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
 out:
     spin_unlock(&heap_lock);
     nrspin_unlock(&d->page_alloc_lock);
+    if ( free_node_claims )
+        xvfree(free_node_claims);
     return ret;
+}
+
+/* Validate all entries before replacing the existing claim set. */
+int domain_set_claim_entries(struct domain *d, unsigned int nr_entries,
+                             const struct xen_domctl_memclaim_entry *entries)
+{
+    uint64_t host_request = 0, requested_pages = 0;
+    nodemask_t nodes;
+    unsigned long available, node_requests = 0;
+    bool host_seen = false;
+    int rc = -EINVAL;
+    typeof(d->claims) claims, free_node_claims = NULL;
+    typeof(d->claims) new = xvzalloc_array(typeof(*d->claims), MAX_NUMNODES);
+
+    nrspin_lock(&d->page_alloc_lock);
+    /* Check the request itself and check it against d->max_pages */
+    /* TODO Check if domain_tot_pages check can be done here already */
+    for ( unsigned int i = 0; i < nr_entries; ++i )
+    {
+        uint64_t request_pages = entries[i].pages;
+        uint32_t target = entries[i].target;
+
+        if ( request_pages > d->max_pages - requested_pages || entries[i].pad )
+            goto out;
+
+        requested_pages += request_pages;
+
+        if ( target == XEN_DOMCTL_CLAIM_MEMORY_HOST )
+        {
+            if ( host_seen )
+                goto out;
+
+            host_seen = true;
+            host_request = request_pages;
+            continue;
+        }
+
+        if ( target >= MAX_NUMNODES || !node_online(target) )
+        {
+            rc = -ENOENT;
+            goto out;
+        }
+
+        if ( nodemask_test(target, &nodes) )
+            goto out;
+        node_set(target, nodes);
+        node_requests += request_pages;
+    }
+    
+    if ( !new )
+        return -ENOMEM;
+
+    /*
+     * Locking order:
+     * - d->page_alloc_lock: protects accesses to d->{tot_,max_,extra_}pages.
+     * - heap_lock: protects accesses to total_avail_pages, node_avail_pages,
+     *   avail[], scrub state and all total and node-specific claim counters.
+     */
+    //nrspin_lock(&d->page_alloc_lock);
+    spin_lock(&heap_lock);
+
+    /* Keep ownership of @new until it is attached on the success path. */
+    claims = d->claims ? : new;
+
+    nodes_clear(nodes);
+    for ( unsigned int i = 0; i < nr_entries; ++i )
+    {
+        uint64_t request_pages = entries[i].pages;
+        uint32_t target = entries[i].target;
+
+        /* Existing claims can fund replacements on the same node. */
+        available = node_avail_pages[target] - node_claimed_pages[target];
+        if ( request_pages > claims[target] &&
+            request_pages - claims[target] > available )
+        {
+            rc = -ENOMEM;
+            goto out;
+        }
+    }
+
+    /* A request for no pages only releases the existing claims. */
+    if ( requested_pages )
+    {
+        if ( domain_tot_pages(d) > d->max_pages ||
+             requested_pages > d->max_pages - domain_tot_pages(d) )
+            goto out;
+
+        available = total_avail_pages > outstanding_claims
+                    ? total_avail_pages - outstanding_claims : 0;
+        available += d->outstanding_pages;
+
+        /* Existing claims remain available to their replacement. */
+        if ( requested_pages > available )
+        {
+            rc = -ENOMEM;
+            goto out;
+        }
+    }
+
+    domain_recall_node_claims(d, d->node_claims);
+    domain_release_host_claims(d, d->outstanding_pages);
+    ASSERT(!d->node_claims && !d->outstanding_pages);
+
+    d->node_claims = requested_pages - host_request;
+    d->outstanding_pages = requested_pages;
+    outstanding_claims += d->outstanding_pages;
+
+    for ( unsigned int i = 0; i < nr_entries; ++i )
+    {
+        uint32_t target = entries[i].target;
+
+        if ( target == XEN_DOMCTL_CLAIM_MEMORY_HOST )
+            continue;
+
+        ASSERT(!claims[target]);
+        claims[target] = entries[i].pages;
+        node_claimed_pages[target] += claims[target];
+    }
+
+    if ( d->node_claims )
+    {
+        d->claims = claims;
+        if ( claims == new )
+            new = NULL; /* Ownership transferred to the domain. */
+    }
+    else
+    {
+        d->claims = NULL;
+        if ( claims != new )
+            free_node_claims = claims;
+    }
+    rc = 0;
+
+ out:
+    spin_unlock(&heap_lock);
+    nrspin_unlock(&d->page_alloc_lock);
+
+    if ( new )
+        xvfree(new);
+    if ( free_node_claims )
+        xvfree(free_node_claims);
+
+    return rc;
 }
 
 #ifdef CONFIG_SYSCTL
@@ -906,6 +1136,17 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
      */
     for ( ; ; )
     {
+        unsigned long available;
+
+        available = node_avail_pages[node] - node_claimed_pages[node];
+
+        /* A domain may allocate from its own node reservation. */
+        if ( d && !(memflags & MEMF_no_refcount) && d->claims )
+            available += d->claims[node];
+
+        if ( available < (1UL << order) )
+            goto next_node; /* If less than required, skip to the next node */
+
         zone = zone_hi;
         do {
             /* Check if target node can support the allocation. */
@@ -935,6 +1176,7 @@ static struct page_info *get_free_buddy(unsigned int zone_lo,
             }
         } while ( zone-- > zone_lo ); /* careful: unsigned zone may wrap */
 
+     next_node:
         if ( (memflags & MEMF_exact_node) && req_node != NUMA_NO_NODE )
             return NULL;
 
@@ -980,6 +1222,7 @@ static struct page_info *alloc_heap_pages(
     unsigned long request = 1UL << order;
     struct page_info *pg;
     bool need_tlbflush = false;
+    typeof(d->claims) free_node_claims = NULL;
     uint32_t tlbflush_timestamp = 0;
     unsigned int dirty_cnt = 0;
     mfn_t mfn;
@@ -1073,8 +1316,19 @@ static struct page_info *alloc_heap_pages(
         unsigned long outstanding = min(d->outstanding_pages + 0UL, request);
 
         BUG_ON(outstanding > outstanding_claims);
-        outstanding_claims -= outstanding;
-        d->outstanding_pages -= outstanding;
+        /* Preserve other node guarantees: consume the local claim first. */
+        outstanding -= domain_release_node_claims(d, node, outstanding);
+        /* Host-wide claims are not tied to another node's guarantee. */
+        outstanding -= domain_release_host_claims(d, outstanding);
+        /* Keep allocated pages plus claims within the domain's limit. */
+        outstanding -= domain_recall_node_claims(d, outstanding);
+        ASSERT(!outstanding);
+
+        if ( !d->node_claims )
+        {
+            free_node_claims = d->claims;
+            d->claims = NULL;
+        }
     }
 
     check_low_mem_virq();
@@ -1109,6 +1363,9 @@ static struct page_info *alloc_heap_pages(
     }
 
     spin_unlock(&heap_lock);
+
+    if ( free_node_claims )
+        xvfree(free_node_claims);
 
     if ( first_dirty != INVALID_DIRTY_IDX ||
          (scrub_debug && !(memflags & MEMF_no_scrub)) )
