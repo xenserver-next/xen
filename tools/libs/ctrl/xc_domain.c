@@ -2222,6 +2222,31 @@ out:
 
     return ret;
 }
+
+/* Atomically install or release a domain's host-wide and per-node claims. */
+int xc_domain_set_memory_claims(xc_interface *xch, uint32_t domid,
+                                const xen_domctl_memory_claim_t *claims,
+                                uint32_t nr)
+{
+    struct xen_domctl domctl = {};
+    DECLARE_HYPERCALL_BOUNCE_IN(claims, sizeof(*claims) * nr);
+    int ret;
+
+    if ( xc_hypercall_bounce_pre(xch, claims) )
+        return -1;
+
+    domctl.cmd = XEN_DOMCTL_set_memory_claims;
+    domctl.domain = domid;
+    domctl.u.memory_claims.nr_entries = nr;
+    set_xen_guest_handle(domctl.u.memory_claims.claim_set, claims);
+
+    ret = do_domctl(xch, &domctl);
+
+    xc_hypercall_bounce_post(xch, claims);
+
+    return ret;
+}
+
 /*
  * Local variables:
  * mode: C
