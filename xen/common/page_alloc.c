@@ -589,6 +589,162 @@ static void domain_redeem_other_node_claims(struct domain *d,
     ASSERT(!pages);
 }
 
+/* Validate a claim request and compute request->total and ->node_pages. */
+static int domain_validate_claim_request(const struct domain *d,
+                                         struct claim_set *request)
+{
+    nodemask_t seen = NODE_MASK_NONE;
+    bool host_seen = false;
+
+    ASSERT(rspin_is_locked(&d->page_alloc_lock));
+    request->total = request->node_pages = 0;
+    for ( unsigned int i = 0; i < request->nr_entries; ++i )
+    {
+        unsigned int target = request->claim[i].target;
+        uint64_t target_pages = request->claim[i].pages;
+
+        /* The sum request->total is bounded by max_pages. */
+        if ( !target_pages || request->claim[i].pad ||
+             target_pages > d->max_pages - request->total )
+            return -EINVAL;
+
+        request->total += target_pages;
+
+        if ( target == XEN_DOMCTL_MEMORY_CLAIM_TARGET_HOST )
+        {
+            if ( host_seen )
+                return -EINVAL;
+
+            host_seen = true;
+            continue;
+        }
+
+        /* Bit 31 marks special targets. */
+        if ( target & 0x80000000U )
+            return -EINVAL;
+
+        if ( target >= MAX_NUMNODES || !node_online(target) )
+            return -ENOENT;
+
+        /* Reject duplicated targets. */
+        if ( node_test_and_set(target, seen) )
+            return -EINVAL;
+
+        request->node_pages += target_pages;
+    }
+
+    if ( domain_tot_pages(d) > d->max_pages ||
+         request->total > d->max_pages - domain_tot_pages(d) )
+        return -EINVAL;
+
+    return 0;
+}
+
+/* Check if the claim request can be satisfied using unclaimed memory. */
+static int check_memory_for_claim_request(const struct claim_set *request)
+{
+    ASSERT(spin_is_locked(&heap_lock));
+
+    /* Test the total on its own first. The sum below can wrap on 32-bit. */
+    if ( request->total > total_avail_pages ||
+         request->total + outstanding_claims > total_avail_pages )
+        return -ENOMEM;
+
+    for ( unsigned int i = 0; i < request->nr_entries; ++i )
+    {
+        unsigned int target = request->claim[i].target;
+
+        if ( target == XEN_DOMCTL_MEMORY_CLAIM_TARGET_HOST )
+            continue;
+
+        if ( request->claim[i].pages + node_claimed_pages[target] >
+             node_avail_pages[target] )
+            return -ENOMEM;
+    }
+
+    return 0;
+}
+
+/*
+ * Install the claims of the request, with *claims for the per-node claims.
+ * On return, *claims is the array for the caller to free: the unused new
+ * one on failure, else the one that was replaced, if any.
+ */
+static int domain_install_claims(struct domain *d,
+                                 const struct claim_set *request,
+                                 unsigned int **claims)
+{
+    unsigned int *new_claims = *claims;
+    int ret;
+
+    ASSERT(rspin_is_locked(&d->page_alloc_lock));
+    spin_lock(&heap_lock);
+    if ( d->outstanding_pages )
+    {
+        ret = -EINVAL;
+        goto out;
+    }
+
+    ret = check_memory_for_claim_request(request);
+    if ( ret )
+        goto out;
+
+    /* Validation bounded the sums by max_pages, so they fit the fields. */
+    d->node_claims = request->node_pages;
+    d->outstanding_pages = request->total;
+    outstanding_claims += d->outstanding_pages;
+    /* Without outstanding claims, a previous array only holds zeros. */
+    *claims = d->claims;
+    d->claims = new_claims;
+
+    for ( unsigned int i = 0; i < request->nr_entries; ++i )
+    {
+        unsigned int target = request->claim[i].target;
+
+        if ( target == XEN_DOMCTL_MEMORY_CLAIM_TARGET_HOST )
+            continue;
+
+        new_claims[target] = request->claim[i].pages;
+        node_claimed_pages[target] += new_claims[target];
+    }
+
+ out:
+    spin_unlock(&heap_lock);
+    return ret;
+}
+
+/* Atomically set the claims of a domain that has no outstanding claims. */
+int domain_set_claim_entries(struct domain *d, struct claim_set *request)
+{
+    unsigned int *new_claims = NULL;
+    int ret;
+
+    ASSERT(request->nr_entries);
+    nrspin_lock(&d->page_alloc_lock);
+
+    ret = domain_validate_claim_request(d, request);
+    if ( ret )
+        goto out;
+
+    if ( request->node_pages )
+    {
+        new_claims = xvzalloc_array(unsigned int, MAX_NUMNODES);
+        if ( !new_claims )
+        {
+            ret = -ENOMEM;
+            goto out;
+        }
+    }
+
+    ret = domain_install_claims(d, request, &new_claims);
+
+ out:
+    nrspin_unlock(&d->page_alloc_lock);
+    xvfree(new_claims);
+
+    return ret;
+}
+
 int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
 {
     int ret = -ENOMEM;
