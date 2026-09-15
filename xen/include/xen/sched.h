@@ -430,7 +430,13 @@ struct domain
     /* Pages claimed but not possessed, protected by global heap_lock. */
     unsigned int     outstanding_pages;
     unsigned int     node_claims;       /* Cached sum of claims[] entries */
-    unsigned int     *claims;           /* Node claims, used under heap_lock */
+    /*
+     * Pages claimed per node, or NULL.  Entries are protected by heap_lock.
+     * The pointer is changed with both page_alloc_lock and heap_lock held:
+     * Staking claims reads it under page_alloc_lock to reuse the array or
+     * allocate a new one, the allocator reads it under heap_lock.
+     */
+    unsigned int     *claims;
     unsigned int     max_pages;         /* maximum value for domain_tot_pages() */
     unsigned int     extra_pages;       /* pages not included in domain_tot_pages() */
 
