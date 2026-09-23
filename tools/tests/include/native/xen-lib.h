@@ -8,6 +8,12 @@
 #define __XEN_ERRNO_H__
 #define printk printf
 
+/* Make stdout for printf line-buffered for all tests */
+__attribute__((constructor)) static void setup_stdout(void)
+{
+    setvbuf(stdout, NULL, _IOLBF, 0);
+}
+
 #define __XEN_BUG_H__
 #define ASSERT(condition) assert(condition)
 #define ASSERT_UNREACHABLE() assert(0)
