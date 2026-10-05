@@ -51,6 +51,36 @@ static int xenctl_bitmap_to_nodemask(nodemask_t *nodemask,
                                    MAX_NUMNODES);
 }
 
+static int get_memory_claims(const struct domain *d, bool *copyback,
+                             struct xen_domctl_memory_claims *op)
+{
+    struct xen_domctl_memory_claim *claim;
+    struct claim_set request = {};
+    int ret;
+
+    if ( op->pad )
+        return -EINVAL;
+
+    /* A domain has at most one entry per node plus a host-wide one. */
+    if ( op->nr_entries > MAX_NUMNODES + 1 )
+        op->nr_entries = MAX_NUMNODES + 1;
+
+    request.nr_entries = op->nr_entries;
+    claim = xvmalloc_array(struct xen_domctl_memory_claim, request.nr_entries);
+    if ( !claim )
+        return -ENOMEM;
+
+    request.claim = claim;
+    ret = domain_get_claim_entries(d, &request);
+    op->nr_entries = request.nr_entries;
+    *copyback = true;
+    if ( !ret && copy_to_guest(op->claim_set, claim, request.nr_entries) )
+        ret = -EFAULT;
+
+    xvfree(claim);
+    return ret;
+}
+
 static int set_memory_claims(struct domain *d,
                              const struct xen_domctl_memory_claims *op)
 {
@@ -619,6 +649,10 @@ long do_domctl(XEN_GUEST_HANDLE_PARAM(xen_domctl_t) u_domctl)
         copyback = true;
         goto domctl_out_unlock_rcuonly;
     }
+
+    case XEN_DOMCTL_get_memory_claims:
+        ret = get_memory_claims(d, &copyback, &op->u.memory_claims);
+        goto domctl_out_unlock_rcuonly;
 
     case XEN_DOMCTL_shadow_op:
         if ( op->u.shadow_op.op == XEN_DOMCTL_SHADOW_OP_CLEAN ||
