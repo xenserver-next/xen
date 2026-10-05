@@ -747,6 +747,52 @@ int domain_set_claims(struct domain *d, struct claim_request *request)
     return ret;
 }
 
+/*
+ * Fill up to request->nr_entries entries with the claims of the domain, the
+ * host-wide claim first.  Set request->nr_entries to the number of entries
+ * needed, and return -ENOBUFS if that exceeds the capacity.
+ */
+int domain_get_claims(const struct domain *d,
+                      struct claim_request *request)
+{
+    unsigned int node, count = 0, capacity = request->nr_entries;
+    unsigned int host_claim;
+
+    /* heap_lock guards d->outstanding_pages, d->node_claims, and d->claims. */
+    spin_lock(&heap_lock);
+    ASSERT(d->outstanding_pages >= d->node_claims);
+    host_claim = d->outstanding_pages - d->node_claims;
+    if ( host_claim )
+    {
+        if ( count < capacity )
+            request->entries[count] = (struct xen_domctl_memory_claim){
+                .target = XEN_DOMCTL_MEMORY_CLAIM_TARGET_HOST,
+                .pages = host_claim,
+            };
+
+        count++;
+    }
+
+    for_each_online_node ( node )
+    {
+        if ( !d->claims || !d->claims[node] )
+            continue;
+
+        if ( count < capacity )
+            request->entries[count] = (struct xen_domctl_memory_claim){
+                .target = node,
+                .pages = d->claims[node],
+            };
+
+        count++;
+    }
+
+    spin_unlock(&heap_lock);
+    request->nr_entries = count;
+
+    return count <= capacity ? 0 : -ENOBUFS;
+}
+
 int domain_set_outstanding_pages(struct domain *d, unsigned long pages)
 {
     int ret = -ENOMEM;
