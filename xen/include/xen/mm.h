@@ -132,6 +132,7 @@ int populate_pt_range(unsigned long virt, unsigned long nr_mfns);
 /* Claim handling */
 struct xen_domctl_memory_claim;
 struct claim_set {
+    /* For get: IN capacity of claim[], OUT number of entries needed. */
     unsigned int nr_entries;
     struct xen_domctl_memory_claim *claim;
     /* Set only: sums of pages, computed by domain_set_claim_entries(). */
@@ -140,6 +141,8 @@ struct claim_set {
 };
 
 int domain_set_claim_entries(struct domain *d, struct claim_set *request);
+int domain_get_claim_entries(const struct domain *d,
+                             struct claim_set *request);
 
 unsigned long __must_check domain_adjust_tot_pages(struct domain *d,
     long pages);
