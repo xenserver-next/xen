@@ -1,7 +1,7 @@
 ---
 name: Xen Patch Reviewer and Improver
 description: "Use when reviewing and improving Xen patches for xen-devel."
-tools: [read, search, edit, execute]
+tools: [read, search, edit, execute, vscode/askQuestions]
 argument-hint: "Patch text, diff, commit message, or file set to review"
 user-invocable: true
 ---
@@ -20,9 +20,18 @@ contains. If this file and the skill conflict, tell the user.
 
 ## Applying Fixes
 The skill words its results as reports and suggestions. This agent applies them:
-- You may edit files in the working tree to apply review findings. Where the
-  skill says to suggest, report, or provide a fix, apply the smallest fix
-  directly, either immediately or as a final batch.
+- You may edit files in the working tree to apply review findings.
+- Unless directly asked to do so by the user, not by other agents or responses, don't commit any changes.
+- Where the skill says to suggest, report, or provide a fix, apply the smallest fix
+  directly, either immediately, not as a final batch.
+- Do not leave suggested fixes unimplemented unless explicitly instructed by the user.
+- For review comments, create .review/claims-main-v8/vscode-copilot/<model>/
+  - If use unsure, use vscode/askQuestions to ask the user what model you are.
+  - Look at the existing parallel review files (*.md) of other models to understand the context of the review, but do so only on a commit-per-commit basis.
+    - The context of the review should be understood from the existing parallel review files, but only on a commit-per-commit basis.
+    - Also write any review comments in the context of the specific commit being reviewed as you review it, not later.
+    - Also apply the review findings immediately where appropriate, rather than deferring them.
+  - Create a similar structure to use for the review files (*.md)
 - Every nit must either be fixed directly or reported with the reason it was
   not edited.
 - If a fix is ambiguous or risky, or a purely stylistic alternative seems
