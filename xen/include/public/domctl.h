@@ -1280,6 +1280,7 @@ struct xen_domctl_get_domain_state {
 };
 
 /* XEN_DOMCTL_set_memory_claims */
+/* XEN_DOMCTL_get_memory_claims */
 /* Memory claim structure */
 typedef struct xen_domctl_memory_claim {
     uint64_aligned_t pages; /* Number of claimed pages. */
@@ -1329,10 +1330,36 @@ DEFINE_XEN_GUEST_HANDLE(xen_domctl_memory_claim_t);
  *  ENOMEM     - allocation failure or not enough unclaimed memory,
  *               in total or on a node
  */
+
+/*
+ * XEN_DOMCTL_get_memory_claims
+ *
+ * Read the outstanding memory claims of a domain: the host-wide claim,
+ * if any, followed by the per-node claims in ascending node order.
+ *
+ * nr_claims is the capacity of the claims array on input.  On output, it is
+ * the number of claims of the domain, which is 0 for a domain without
+ * claims.  If that exceeds the capacity, no claims are written and ENOBUFS
+ * is returned, so a capacity of 0 queries the number of claims.  A capacity
+ * above the maximum number of nodes plus one for the host-wide claim is
+ * clamped.
+ *
+ * XEN_DOMCTL_get_memory_claims fails with:
+ *  EINVAL      - pad not zero
+ *  ENOMEM      - allocation failure
+ *  ENOBUFS     - the capacity is below the number of claims
+ *  EFAULT      - the claims array or domctl cannot be copied to the guest
+ */
+
+/* The argument of XEN_DOMCTL_{set,get}_memory_claims. */
 struct xen_domctl_memory_claims {
-    /* IN: array of claims. */
+    /* For set, IN: claims to install.  For get, OUT: claims of the domain. */
     XEN_GUEST_HANDLE_64(xen_domctl_memory_claim_t) claims;
-    uint32_t nr_claims;     /* IN: number of claims. */
+    /*
+     * For set, IN: number of claims.
+     * For get, IN: capacity of claims, OUT: number of claims of the domain.
+     */
+    uint32_t nr_claims;
     uint32_t pad;           /* IN: Must be zero. */
 };
 
@@ -1429,6 +1456,7 @@ struct xen_domctl {
 #define XEN_DOMCTL_set_llc_colors                89
 #define XEN_DOMCTL_get_domain_state              90 /* stable interface */
 #define XEN_DOMCTL_set_memory_claims             91
+#define XEN_DOMCTL_get_memory_claims             92
 #define XEN_DOMCTL_gdbsx_guestmemio            1000
 #define XEN_DOMCTL_gdbsx_pausevcpu             1001
 #define XEN_DOMCTL_gdbsx_unpausevcpu           1002
