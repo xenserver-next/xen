@@ -27,35 +27,15 @@ For readers following the design in order, the preceding sections are:
 Overview
 ^^^^^^^^
 
-.. table:: Table 1: Claims accounting: All accesses, Aggregate state,
-           and invariants protected by :c:var:`heap_lock`.
-   :widths: auto
+.. csv-table:: Claims accounting state
+   :header: "Level", "Claims", "Free pages or constraint"
+   :widths: 20 40 40
 
-   ============ =========================================== =======================
-   Level           Claims must be lower or equal to          the available memory
-   ============ =========================================== =======================
-   Total        :c:var:`outstanding_claims` =               :c:var:`total_avail_pages` =
-
-                 = Aggregate state:
-                  SUM() over all domains:                   Aggregate state:
-                  SUM(:c:member:`domain.outstanding_pages`)   SUM(:c:var:`node_avail_pages`)
-
-                Also, it is the sum of claims
-                over all nodes:
-
-                 = Aggregate state:
-                  SUM(:c:expr:`node_outstanding_claims[*]`)
-   Node         :c:expr:`node_outstanding_claims[node]`     :c:expr:`node_avail_pages[node]`
-
-                  Aggregate state over all domains:          Aggregate of the free
-                  SUM(:c:expr:`domain.claims[node]`)         lists of all zones on node
-   Dom per-node :c:member:`domain.node_claims` =
-                SUM(:c:expr:`domain.claims[node]`)          :c:expr:`node_avail_pages[node]`
-   Total claims :c:member:`domain.outstanding_pages`        :c:var:`total_avail_pages`
-   Memory limit :c:member:`domain.outstanding_pages`         Invariant: must be
-                + :c:func:`domain_tot_pages`                 lower or equal to
-                                                             :c:member:`domain.max_pages`
-   ============ =========================================== =======================
+   "Host", "``outstanding_claims``", "``total_avail_pages``"
+   "Per-node", "``node_claimed_pages[node]``", "``node_avail_pages[node]``"
+   "Domain subtotal", "``d->node_claims``", "Sum of ``d->claims[]`` entries"
+   "Domain total", "``d->outstanding_pages``", "Host-wide plus node claims"
+   "Domain limit", "Allocated pages plus claims", "Checked at installation"
 
 
 Total claims and available memory
@@ -69,7 +49,8 @@ Total claims and available memory
  quickly determine if an allocation can be satisfied from unclaimed memory or
  if further checks are needed to determine if the claims of the domain can be
  used to free up memory for the allocation. This also ensures that the sum of
- all claims never exceeds the total free memory in the system.
+ claims do not exceed available memory at installation time. Offlining can
+ later reduce available memory below outstanding claims.
 
 
  The number of unclaimed pages across all nodes in the system is derived as
@@ -77,13 +58,20 @@ Total claims and available memory
  This number is then used to:
 
  - Permit allocation requests if they can be satisfied from unclaimed pages.
- - Ensure that the sum of all claims never exceeds the total free memory.
+ - Validate that claims fit within currently available memory when installed.
 
  .. c:var:: unsigned long total_avail_pages
 
-   Total available pages in the system across all NUMA nodes.
-   It is the aggregate of the per-node available pages:
-   :c:var:`total_avail_pages` = SUM(:c:expr:`node_avail_pages[MAX_NUMNODES]`)
+    Free pages accounted by the common heap allocator across all NUMA nodes,
+    including capacity reserved by claims. This is not total installed RAM.
+    It sums ``node_avail_pages[node]`` for valid node indices; ``MAX_NUMNODES``
+    is the array length, not an index into the array.
+
+    These counters aggregate heap zones, not just the zones usable by a given
+    request. With ``CONFIG_SEPARATE_XENHEAP``, they include the Xen-only heap,
+    which domain-heap allocations cannot use. Claim admission does not reserve
+    zone-specific capacity; a later allocation still needs suitable pages in
+    its permitted zones.
 
  .. c:var:: unsigned long outstanding_claims
 
@@ -96,11 +84,14 @@ Per-node claims and available memory
 
  .. c:var:: unsigned long node_avail_pages[MAX_NUMNODES]
 
-   Available pages for each NUMA node, including both free and claimed pages.
+   Free heap pages for each NUMA node, including pages reserved by claims.
+   Claims reserve counts within this free capacity; Xen does not tag
+   individual free pages as claimed. Claims are not an additional page
+   category and can exceed the remaining free capacity after offlining.
    This is used for validating that node claims do not exceed the available
    memory on the respective NUMA node.
 
- .. c:var:: unsigned long node_outstanding_claims[MAX_NUMNODES]
+ .. c:var:: unsigned long node_claimed_pages[MAX_NUMNODES]
 
    The total claims across all domains for each NUMA node, indexed by node
    ID. This is maintained for efficient checks in the allocator hot paths.
@@ -123,10 +114,8 @@ Claims accounting state for each domain
    and node-specific claims, as well as the maximum page limits for the
    domain and the lock protecting the domain's page allocation counts.
 
-   While the domain's page counts are currently `unsigned int`, work is
-   underway to change them to `unsigned long` to support larger page counts
-   beyond 16 TB. The code is already designed to anticipate this change and
-   work with either `unsigned int` or `unsigned long` page counts equally well.
+   The domain's page counts, including its claims and maximum page limit, are
+   currently ``unsigned int``.
 
    .. c:member:: unsigned int outstanding_pages
 
@@ -135,59 +124,36 @@ Claims accounting state for each domain
 
    .. c:member:: unsigned int node_claims
 
-      The total of the domain's node-affine claims, maintained for efficient
-      checks in the allocator hot paths without needing to sum over the
-      per-node claims each time. It is equal to the sum of
-      :c:expr:`claims[MAX_NUMNODES]` for all nodes.
+      The total of the domain's per-node claims, maintained for efficient
+      checks in the allocator hot paths without summing the per-node array.
 
-   .. c:member:: unsigned int claims[MAX_NUMNODES]
+   .. c:member:: unsigned int *claims
 
-      The domain's claims for each :term:`NUMA node`, indexed by node ID.
+      Per-node claims indexed by node ID. A nonzero per-node claim requires
+      an array, but an all-zero array can remain attached after full redemption.
+      Xen allocates the array when installing per-node claims and detaches and
+      frees it on explicit release, destruction, or replacement by a subsequent
+      installation after all outstanding claims have been redeemed.
+      Access is protected by :c:var:`heap_lock`.
 
-      As the storage for ``struct`` :c:struct:`domain` is allocated using a
-      dedicated page for each domain, this array allows for efficient and
-      fast storage with direct indexing, without consuming any additional
-      memory for an extra allocation.
-
-
-      The claims for each node are used for NUMA-affine domains to specify
-      the amount of memory claimed for each node, to ensure that the domain's
-      claims for each node do not exceed the available memory on that node,
-      and to allow the allocator to redeem claims from the appropriate nodes
-      when allocating memory for the domain.
-
-      .. literalinclude:: ../../../xen/common/domain.c
-         :language: C
-         :caption: Allocation of the domain structure in ``xen/common/domain.c``
-         :start-at: alloc_domain_struct
-         :end-at: }
-         :emphasize-lines: 7, 12, 14
-         :linenos:
-         :lineno-match:
-
-      The page allocated for ``struct`` :c:struct:`domain` is large enough
-      to accommodate this array several times, even beyond the current
-      :c:macro:`MAX_NUMNODES` limit of 64. It should be sufficient even for
-      future expansion of the maximum number of supported NUMA nodes if
-      needed. The allocation has a build-time assertion for safety to ensure
-      that ``struct`` :c:struct:`domain` fits within the allocated page.
-
-
-      The sum of these claims is stored in :c:member:`domain.node_claims`
-      for efficient checks in the allocator hot paths which need to know
-      the total number of node claims for the :term:`domain`.
+      The sum of the entries is cached in :c:member:`domain.node_claims`.
+      This allows the allocator to derive the domain's host-wide claim as
+      :c:member:`domain.outstanding_pages` minus
+      :c:member:`domain.node_claims`.
 
    .. c:member:: unsigned int max_pages
 
-      The maximum number of pages the domain is allowed to claim, set at
-      domain creation time.
+      The maximum for ``domain_tot_pages(d)``, which excludes extra pages.
+      Installation checks that count plus requested claims against this limit.
+      The toolstack can change the
+      limit with ``XEN_DOMCTL_max_mem``; it is not fixed at creation time.
 
    .. c:member:: rspinlock_t page_alloc_lock
 
       Lock for checking :c:func:`domain_tot_pages` on top of new claims
       against :c:member:`domain.max_pages` when installing these new claims.
-      This is a recursive spinlock to allow for nested calls into the allocator
-      while holding it, such as when redeeming claims during page allocation.
+      This recursive spinlock protects domain page counts and limits. Claim
+      redemption itself takes only the heap lock and does not acquire it.
       It is taken before :c:var:`heap_lock` when installing claims to ensure a
       consistent locking order and must not be taken while holding
       :c:var:`heap_lock` to avoid deadlocks.
@@ -202,21 +168,28 @@ Claims accounting state for each domain
 Claims accounting invariants
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-   Xen must maintain the following invariants at all times to ensure correctness
-   of claims accounting:
+   Host and node admission maintain the following capacity bounds while
+   offlining has not removed the memory backing existing claims:
 
- - For all claims, including node-affine and host-wide claims:
+ - For all claims, including per-node and host-wide claims:
     :c:var:`outstanding_claims` :math:`\le` :c:var:`total_avail_pages`
 
- - For node-specific claims:
-    :c:expr:`node_outstanding_claims[alloc_node]` :math:`\le`
+ - For per-node claims:
+    :c:expr:`node_claimed_pages[alloc_node]` :math:`\le`
     :c:expr:`node_avail_pages[alloc_node]`
 
- - For a domain's overall claims:
-    :c:var:`domain.outstanding_pages` +
-    :c:var:`domain_tot_pages` :math:`\le` :c:var:`domain.max_pages`
+   The separate domain-limit check at installation is
+   ``domain_tot_pages(d) + requested_claims <= d->max_pages``. It is not
+   an unconditional capacity invariant: page offlining does not affect this
+   limit check, whereas a later reduction of ``max_pages`` can invalidate it.
+   The allocation count also excludes pages removed from the heap but not yet
+   assigned. Builder serialization must cover those allocations and their
+   continuations. See :doc:`redeeming` for the redemption relationship.
 
-    See :doc:`redeeming` for more information on this invariant.
+   Offlining memory can invalidate the host and node free-versus-claimed
+   relationships. Xen does not recall claims in that case. The per-node
+   availability subtraction is clamped to zero; this is not a blanket
+   underflow guarantee for every legacy host-wide accounting expression.
 
 Constants
 ^^^^^^^^^
@@ -224,46 +197,39 @@ Constants
  .. c:macro:: MAX_NUMNODES
 
    The maximum number of NUMA nodes supported by Xen. Used for validating
-   node IDs in the :c:type:`memory_claim_t` entries of claim sets.
+   node IDs in the :c:type:`xen_domctl_memory_claim_t` entries of claim sets.
    When Xen is built without NUMA support, it is 1.
 
-   The default on x86_64 is 64 which is sufficient for current hardware and
-   allows for efficient storage of e.g. the :c:var:`node_online_map` for
-   online nodes and :c:member:`domain.node_affinity` in a single 64-bit value,
-   and in the :c:expr:`domain.claims[MAX_NUMNODES]` array.
-
-   ``xen/arch/Kconfig`` limits the maximum number of NUMA nodes to 64. While
-   Xen can be compiled for up to 254 nodes, configuring machines to split
-   the installed memory into more than 64 nodes would be unusual.
-   For example, dual-socket servers, even when using multiple chips per CPU
-   package should typically be configured for 2 NUMA nodes by default.
+   With NUMA enabled, ``xen/arch/Kconfig`` permits values from 2 to 64 and
+   defaults to 64. A 64-node bitmap fits in one 64-bit word, but the claims
+   array contains a separate ``unsigned int`` for every configured node.
+   These build-time limits do not prescribe a platform's firmware NUMA layout.
 
  .. c:var:: nodemask_t node_online_map
 
    A bitmap representing which NUMA nodes are currently online in the system.
    This is used for validating that claims are only made for online nodes and
    for efficient checks in the allocator hot paths to quickly determine which
-   nodes are online. Currently, Xen does not support hotplug of NUMA nodes,
-   so this is set at boot time based on the platform firmware configuration
-   and does not change at runtime.
+   nodes are online. Claims can only target online nodes when installed.
+   Page offlining reduces free-page counts without necessarily removing the
+   node from this map. The current runtime node-offline path rolls back
+   unsuccessful hot-add before the new memory reaches the heap; arbitrary
+   node hot-remove is not covered by this design.
 
 Types
 ^^^^^
 
  .. c:type:: uint8_t nodeid_t
 
-   Type for :term:`NUMA node` IDs. It is passed to Xenctrl using the
-   :c:var:`mem_flags` argument of :c:func:`xc_domain_populate_physmap()`
-   and passed to Xen in this form.
+   Internal type for :term:`NUMA node` IDs. ``NUMA_NO_NODE`` is 255, leaving
+   numeric IDs 0 through 254 representable; the supported build-time node
+   count is separately limited by ``CONFIG_NR_NUMA_NODES``.
 
-   It allocates 8 bits in the flags for the node ID, which limits the
-   theoretical maximum value of :c:macro:`CONFIG_NR_NUMA_NODES` at 254
-   (255 is :c:macro:`NUMA_NO_NODE`), which is far beyond the current
-   maximum of 64 supported by Xen and should be sufficient for all
-   practical purposes. This also allows for efficient storage of NUMA
-   nodes in arrays indexed by node ID and in :c:type:`nodemask_t` bitmaps
-   :c:var:`node_online_map` and :c:member:`domain.node_affinity` for
-   efficient checks in the allocator hot paths.
+   Population hypercalls encode the requested node in the unsigned
+   ``mem_flags`` argument using ``XENMEMF_node()``. Its eight-bit field stores
+   the node ID plus one, with zero meaning no specified node; it is not a
+   public ``nodeid_t`` argument. Claim entries instead carry a 32-bit target
+   field and validate node targets against ``MAX_NUMNODES``.
 
  .. c:type:: nodemask_t
 
@@ -275,11 +241,9 @@ Types
 Memflags
 ^^^^^^^^
 
- .. c:type:: memflags
-
-    Flags for memory allocation requests that can affect the allocation
-    behaviour, such as node preference and whether the request is for an
-    exact node.
+The internal ``memflags`` argument is an ``unsigned int`` bitmask, not a C
+type. Its ``MEMF_*`` flags are distinct from the public ``XENMEMF_*`` flags
+translated by the memory hypercall handler.
 
  .. c:macro:: MEMF_no_owner
 
@@ -289,43 +253,51 @@ Memflags
 
  .. c:macro:: MEMF_no_refcount
 
-    Flag for memory allocation requests to indicate that the request is not
-    reference-counted to a domain's memory allocation state, and as part of
-    that, claims of a domain cannot be used to protect and redeem the
-    allocation using claims. This is used for requests which are not for
-    domains or which explicitly bypass reference-counting for other reasons.
+    Prevents credit from, and redemption of, the target domain's claims in
+    the heap allocator. On the domain-heap allocation path, owned pages can
+    still be assigned and tracked as extra pages excluded from
+    ``domain_tot_pages()``. It does not disable page reference counting or
+    imply ``MEMF_no_owner``. Assignment and transfer callers can also use the
+    flag to avoid double-charging pages already accounted for elsewhere.
 
  .. c:macro:: MEMF_no_scrub
 
-    Flag for memory allocation requests to indicate that the allocated memory
-    should not be scrubbed (zeroed) before being used. This is used for
-    performance reasons for certain types of allocations where the caller
-    guarantees that the memory will be properly initialized before use.
+    Suppresses allocator-side scrubbing. The caller remains responsible for
+    making the contents safe before exposing the pages to the guest; the flag
+    does not authorize disclosure of data belonging to a previous owner.
+
+ .. c:macro:: MEMF_keep_scrub
+
+    Valid only with ``MEMF_no_scrub``. Retains per-page scrub markers and
+    defers ordinary domain assignment so that the caller can scrub before
+    assigning the pages. Creation-time population uses this for preemptible
+    deferred scrubbing.
 
 Locking of the claims state
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
- .. :c:member:: domain.page_alloc_lock
-
-    If :c:var:`domain.page_alloc_lock` is needed, e.g. to check
-    :c:func:`domain_tot_pages` on top of new claims against
-    :c:var:`domain.max_pages` for the domain, it needs to be taken before
-    :c:var:`heap_lock` for consistent locking order to avoid deadlocks.
+When both locks are needed, take :c:member:`domain.page_alloc_lock` before
+:c:var:`heap_lock`. Installation uses that order to preserve the validated
+domain page count and limit until claim admission and publication complete.
+Taking the page allocation lock while holding the heap lock would invert
+this order.
 
  .. c:var:: spinlock_t heap_lock
 
-    Lock for all heap operations including claims. It protects the claims
-    state and invariants from concurrent updates and ensures that checks
-    in the allocator hot paths see a consistent view of the claims state.
+    Protects common-heap free lists, free-page counters, and published claims
+    state. Admission, redemption, and free-page counter changes use this lock
+    to keep their accounting consistent. Scrubbing page contents, TLB flushing,
+    and subsequent domain assignment do not all occur under this lock.
 
 Helper functions
 ^^^^^^^^^^^^^^^^
 
- .. c:function:: inline unsigned int domain_tot_pages(struct domain *d)
+ .. c:function:: unsigned int domain_tot_pages(const struct domain *d)
 
    :param d: The domain for which to calculate the total pages.
-   :type d: struct domain *
-   :returns: The total pages allocated to the domain.
+   :type d: const struct domain *
+   :returns: ``d->tot_pages - d->extra_pages``, the pages counted towards
+             the domain's normal page limit.
 
    This function is used for validating that an allocation and the domain's
    claims do not exceed :c:member:`domain.max_pages`.

@@ -2,22 +2,15 @@
 sequenceDiagram
 
 actor DomainBuilder
-participant OcamlStub as OCaml stub for<br>xc_domain<br>claim_memory
-participant Libxc as xc_domain<br>claim_memory
-participant Domctl as XEN_DOMCTL<br>claim_memory
-#participant DomainLogic as claim_memory
-participant Alloc as domain<br>set<br>outstanding_pages
+participant Libxc as xc_domain_set_memory_claims
+participant Domctl as XEN_DOMCTL_set_memory_claims
+participant Alloc as domain_set_claims
 
-DomainBuilder->>OcamlStub: claims
-OcamlStub->>OcamlStub: marshall claims -----> OCaml to C
-OcamlStub->>Libxc: claims
-
+DomainBuilder->>Libxc: claims
 Libxc->>Domctl: do_domctl
 
-Domctl->>Domctl: copy_from_guest(claim)
-Domctl->>Domctl: validate claim
-Domctl->>Alloc: set<br>outstanding_pages
+Domctl->>Domctl: copy and validate claim entries
+Domctl->>Alloc: validate and install claims
 Alloc-->>Domctl: result
 Domctl-->>Libxc: rc
-Libxc-->>OcamlStub: rc
-OcamlStub-->>DomainBuilder: claim_result
+Libxc-->>DomainBuilder: result

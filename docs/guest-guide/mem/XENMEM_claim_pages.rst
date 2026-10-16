@@ -4,8 +4,9 @@
 claim_pages
 ***********
 
- .. note:: This API is deprecated;
-    Use :c:expr:`XEN_DOMCTL_claim_memory` for new code.
+ .. note:: This legacy API remains available for compatibility.
+    Use :c:expr:`XEN_DOMCTL_set_memory_claims` and
+    :c:expr:`XEN_DOMCTL_get_memory_claims` for new code.
 
  .. c:macro:: XENMEM_claim_pages
 
@@ -55,9 +56,10 @@ Data structure for the hypercall command for installing legacy claims:
       the possibility of passing a single NUMA node ID, but using it to pass
       a NUMA node ID is not currently supported by the legacy claim path.
 
-      During review of the NUMA extension of the legacy claim path, it
-      was used, but the request was made to instead create a new hypercall
-      which is now :c:macro:`XEN_DOMCTL_claim_memory` with support for claim sets.
+      During review of the NUMA extension of the legacy claim path, it was
+      used, but the request was made to introduce separate set/get domctls,
+      now :c:macro:`XEN_DOMCTL_set_memory_claims` and
+      :c:macro:`XEN_DOMCTL_get_memory_claims`, with support for claim sets.
 
    .. c:member:: unsigned int extent_order
    .. c:member:: xen_pfn_t *extent_start

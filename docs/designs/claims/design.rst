@@ -19,7 +19,9 @@ they are creating, configuring, and building.
 
 These reservations are called :term:`claims`. They ensure that the claimed
 memory remains available for the :term:`domains` when allocating it, even if
-other :term:`domains` are allocating memory at the same time.
+other :term:`domains` are allocating memory at the same time, provided memory
+offlining has not removed the capacity backing the claims. Claims reserve page
+counts, not contiguous extents, particular address zones, or a placement policy.
 
 :term:`Installing claims` is a privileged operation performed by
 :term:`domain builders` before they populate the :term:`guest physical memory`.
@@ -29,8 +31,9 @@ for pages that are claimed but not yet allocated.
 
 When claim installation succeeds, Xen updates the claim state to reflect the
 new targets and protects the claimed memory until it is allocated or the claim
-is released. As Xen allocates pages for the domain, claims are redeemed by
-reducing the claim state by the size of each allocation.
+is released. For ref-counted domain-heap allocations, Xen redeems the smaller
+of the allocation size and the domain's outstanding total, even when unclaimed
+memory would have been sufficient to admit the allocation.
 
 ************
 Design Goals
@@ -43,15 +46,16 @@ The design's primary goals are:
 
 2. Preserve the existing :c:macro:`XENMEM_claim_pages` hypercall command
    for compatibility with existing :term:`domain builders` and its legacy
-   semantics, while introducing a new, unrestricted hypercall command for
-   new use cases such as NUMA-aware claim sets.
+   semantics, while introducing set/get domctls for new use cases such as
+   NUMA-aware claim sets.
 
 3. Host-wide claims are supported for compatibility with existing
    :term:`domain builders` and for use cases where a flexible claim that
-   can exists in the level of the host is desirable.
+   can exist at the host level is desirable.
 
-   It means the global outstanding claims count of the host is not obsolete
-   and needs to be maintained as it needs to account for such host-wide claims.
+   The global outstanding count includes both host-wide and per-node claims.
+   It bounds total reservations even when no individual node has enough
+   information to account for the host-wide portion.
 
 4. Use fast allocation-time claims protection in the allocator's hot paths
    to protect claimed memory from parallel allocations by other domain
@@ -62,38 +66,30 @@ The design's primary goals are:
 Design Overview
 ***************
 
-The legacy :c:macro:`XENMEM_claim_pages` hypercall is superseded by
-:c:macro:`XEN_DOMCTL_claim_memory`. This hypercall installs a :term:`claim set`.
-It is an array of :c:type:`memory_claim_t` entries, where each entry specifies
-a page count and a target: either a specific NUMA node ID or a selector.
+The legacy :c:macro:`XENMEM_claim_pages` hypercall remains available for
+compatibility. The new :c:macro:`XEN_DOMCTL_set_memory_claims` domctl installs a
+:term:`claim set`. It is an array of :c:type:`xen_domctl_memory_claim_t`
+entries, where each entry specifies a page count and a target: either a
+specific NUMA node ID or the host-wide selector.
 
-Like legacy claims, claim sets are validated and installed under
-:c:member:`domain.page_alloc_lock` and :c:var:`heap_lock`: Either the entire
-set is accepted, or the request fails with no side effects.  Repeated calls
-to install claims replace any existing claims for the domain rather than
-accumulating.
+Claim sets are validated and installed under :c:member:`domain.page_alloc_lock`
+and :c:var:`heap_lock`: Either the entire set is accepted, or the request fails
+without changing the claims. A non-empty set can only be installed during
+domain creation and when the domain has no outstanding claims. An empty set
+releases outstanding claims, including after domain creation has finished.
 
-As installing claim sets after allocations is not a supported use case,
-the legacy behaviour of subtracting existing allocations from installed
-claims is somewhat surprising and counterintuitive, and page exchanges
-make incremental per-node tracking of already-allocated pages on a per-node
-basis difficult. Therefore, claim sets do not retain the legacy behaviour of
-subtracting existing allocations, optionally on a per-node basis, from the
-installed claims across the individual claim set entries.
+Each entry specifies additional outstanding pages, not a final allocation
+target. Existing allocations are permitted before creation finishes, but their
+total plus the requested claims must fit within the domain's maximum page
+count. Unlike the legacy interface, Xen does not subtract existing allocations
+from the requested page counts. The builder must serialize installation with
+allocations for that domain, including completion of allocation continuations.
 
-Summary:
-
-- Legacy domain builders can continue to use the previous (now deprecated)
-  :c:expr:`XENMEM_claim_pages` hypercall command to install legacy claims.
-
-- Updated domain builders can take advantage of claim sets to install
-  NUMA-aware :term:`claims` on multiple :term:`NUMA nodes` and/or claims
-  that are not bound to specific nodes. It has more intuitive semantics
-  that do not subtract existing allocations from the installed claims.
-  Such semantics are also simpler to understand and maintain, and are not
-  affected by the complexity of tracking existing allocations on a per-node
-  basis across page exchanges happening concurrently with claim installation
-  for new domains under construction.
+Legacy domain builders can continue to use :c:macro:`XENMEM_claim_pages`.
+Updated builders can install a single set of host-wide and per-node claims
+without attributing existing allocations to individual claim targets. This
+does not permit page exchanges or other allocation operations to race with
+claim installation for the same domain.
 
 For readers following the design in order, the next sections cover the
 following topics:
@@ -112,40 +108,42 @@ Key design decisions
 
 .. glossary::
 
- :c:expr:`node_outstanding_claims[MAX_NUMNODES]`
+ :c:expr:`node_claimed_pages[MAX_NUMNODES]`
   Tracks the sum of all claims on a node. :c:func:`get_free_buddy()` checks
   it before scanning zones on a node, so claimed memory is protected from
   other allocations.
 
- :c:expr:`redeem_claims_for_allocation()`
-   When allocating memory for a domain, the page allocator redeems the matching
-   claims for this allocation, ensuring the domain's total memory allocation as
-   :c:func:`domain_tot_pages` plus :c:member:`domain.outstanding_pages` remain
-   within the domain's limits, defined by :c:member:`domain.max_pages`.
-   See :doc:`redeeming` for details on redeeming claims.
+ :c:expr:`domain_redeem_node_claim()`
+   Redeems up to the requested number of pages from one node's claim and
+   updates the domain, node, and host claim counters together. It is the first
+   step of the allocator's three-step redemption sequence, not a standalone
+   check of :c:member:`domain.max_pages`. See :doc:`redeeming` for the full
+   sequence and its domain-limit qualifications.
 
  :c:expr:`domain.outstanding_pages`
-  It remains the authoritative source for the total outstanding claims of a
-  domain, and is updated on claim installation and redemption. It includes
-  both host-wide claims and node-specific claims.
-  Support for :term:`host-wide claims` is maintained for two reasons: first,
-  for compatibility with existing domain builders, and second, for use cases
-  where a flexible claim that can be satisfied from any node is desirable.
+   It remains the authoritative source for the total outstanding claims of a
+   domain, and is updated on claim installation, redemption, and release. It
+   includes both host-wide claims and per-node claims. The per-node portions
+   are also tracked by :c:member:`domain.node_claims` and
+   :c:member:`domain.claims`.
+   Support for :term:`host-wide claims` is maintained for two reasons: first,
+   for compatibility with existing domain builders, and second, for use cases
+   where a flexible claim that can be satisfied from any node is desirable.
 
-  When the preferred NUMA node(s) for a domain do not have sufficient free
-  memory to satisfy the domain's memory requirements, host-wide claims provide
-  a flexible fallback for the memory shortfall from the preferred node(s) that
-  can be satisfied from any available node.
+   When the preferred NUMA node(s) for a domain do not have sufficient free
+   memory to satisfy the domain's memory requirements, host-wide claims provide
+   a flexible fallback for the memory shortfall from the preferred node(s) that
+   can be satisfied from any available node.
 
-  In this case, :term:`domain builders` can use a combination of passing
-  the preferred node to :c:func:`xc_domain_populate_physmap()` and
-  :term:`NUMA node affinity` to steer allocations towards the preferred
-  NUMA node(s), while letting host-wide claims ensure that the shortfall
-  is available.
+   In this case, :term:`domain builders` can use a combination of passing
+   the preferred node to :c:func:`xc_domain_populate_physmap()` and
+   :term:`NUMA node affinity` to steer allocations towards the preferred
+   NUMA node(s), while letting host-wide claims ensure that the shortfall
+   is available.
 
-  This allows the domain builder to define a set of desired NUMA nodes to
-  allocate from and even specify which nodes to prefer for an allocation,
-  but the claim for the shortfall is flexible, not specific to any node.
+   This allows the domain builder to define a set of desired NUMA nodes to
+   allocate from and even specify which nodes to prefer for an allocation,
+   but the claim for the shortfall is flexible, not specific to any node.
 
 *********
 Non-goals
@@ -162,17 +160,17 @@ it would not eliminate the need to take the global :c:var:`heap_lock`,
 which is still needed to protect the allocator's state during allocation
 and freeing of pages.
 
-The synchronisation point for taking the global :c:var:`heap_lock` is
-the main point of contention during allocation, freeing and scrubbing
-pages. The overhead of accessing the per-node claims accounting data
-is expected to be minimal.
+The global :c:var:`heap_lock` remains a shared synchronisation point for
+allocation, freeing, and the heap metadata used by background scrubbing.
+Scrubbing page contents happens outside the lock. The relative contention
+cost and the overhead of per-node claims accounting have not been isolated
+by the product observations in :doc:`performance`.
 
-Avoiding the :c:var:`heap_lock` would be difficult to achieve as it
-would require updating the page allocator to maintain atomic updates
-of a new ``total_unclaimed_pages`` counter, which would be decremented
-on allocation and claims installation and incremented on freeing of
-pages and claims, and to check that counter in the hot path of the
-allocator to protect claimed memory from other allocations.
+Removing :c:var:`heap_lock` would require a separate allocator design that
+synchronizes buddy lists, free-page counters, and claim admission and redemption.
+An atomic unclaimed-page counter alone would not make those operations atomic
+with each other. This series neither changes that synchronization nor chooses
+a replacement locking scheme.
 
 However, we aim to move that data into the per-node allocator data in the
 future to reduce the need to bounce those data structures between nodes.
@@ -181,8 +179,8 @@ Legacy behaviours
 =================
 
 Installing claims is a privileged operation performed by domain builders
-before they populate guest memory. As such, tracking previous allocations
-is not in scope for claims.
+during domain creation. Existing allocations count towards the domain limit,
+but do not reduce the outstanding page counts requested by the new interface.
 
 For the following reasons, claim sets do not retain the legacy behaviour
 of subtracting existing allocations from installed claims:
@@ -191,53 +189,53 @@ of subtracting existing allocations from installed claims:
   and the hypercall to exchange extents of memory with new memory makes
   such accounting relatively complicated.
 
-- The legacy behaviour is somewhat surprising and counterintuitive.
-  Because installing claims after allocations is not a supported use case,
-  subtracting existing allocations at installation time is unnecessary.
+- Existing allocations need not be attributed to individual claim targets.
 
 - Claim sets are a new API and can provide more intuitive semantics
   without subtracting existing allocations from installed claims. This
   also simplifies the implementation and makes it easier to maintain.
 
-Versioned hypercall
-===================
+Versioned domctl interface
+==========================
 
-The :term:`domain builders` using the :c:macro:`XEN_DOMCTL_claim_memory`
-hypercall also need to use other version-controlled hypercalls which
-are wrapped through the :term:`libxenctrl` library.
+``XEN_DOMCTL_set_memory_claims`` and ``XEN_DOMCTL_get_memory_claims`` are
+commands of the existing domctl hypercall, not new hypercall numbers. They
+use ``XEN_DOMCTL_INTERFACE_VERSION``. The libxenctrl wrappers supply that
+version and handle the claim-array bounce buffers for their callers.
 
-Wrapping this call in :term:`libxenctrl` is therefore a practical approach;
-otherwise, we would have a mix of version-controlled and unversioned
-:term:`hypercalls`, which could be confusing for API users and for future
-maintenance.
+The versioning rules in the public domctl header apply: incompatible changes
+can require a version bump, whereas pure additions and compatible extensions
+do not. Adding these two commands therefore does not itself require a bump.
+Zero-checked padding and reserved target values leave room for compatible
+extensions, but do not make the interface unversioned.
 
-From the domain builders' viewpoint, it is more consistent to expose
-the claims :term:`hypercalls` in the same way as the other calls they use.
-
-Stable interfaces also have drawbacks: with stable syscalls, Linux needs
-to maintain the old interface indefinitely, which can be a maintenance burden
-and can limit the ability to make improvements or changes to the interface
-in the future. Linux carries many system call successor families, e.g.,
-``oldstat``, ``stat``, ``newstat``, ``stat64``, ``fstatat``, ``statx``,
-with similar examples including ``openat``, ``openat2``, ``clone3``, ``dup3``,
-``waitid``, ``mmap2``, ``epoll_create1``, ``pselect6`` and many more.
-Glibc hides that complexity from users by providing a consistent API, but it
-still needs to maintain the old system calls for compatibility.
-
-In contrast, versioned :term:`hypercalls` allow for more flexibility and
-evolution of the API while still providing a clear path to adopt new features.
-The reserved fields and reserved bits in the structures of this hypercall
-allow for many future extensions without breaking existing callers.
+The legacy ``XENMEM_claim_pages`` memory operation remains available with its
+existing ABI. Adding the domctl wrappers neither removes that operation nor
+eliminates the distinction between memory operations and versioned domctls.
 
 *****************
 Future extensions
 *****************
 
+Per-node availability reporting is separate from this series.
+``XEN_SYSCTL_numainfo`` reports free heap memory, including memory reserved by
+claims; it does not expose ``node_claimed_pages[]`` or per-node unclaimed
+capacity. ``XEN_DOMCTL_get_memory_claims`` reports one domain's reservations,
+not the host's remaining capacity. A builder must handle admission failure
+even after selecting nodes from a free-memory query: only installation makes
+the reservation atomic, and a prior capacity query cannot prevent races.
+
 The reserved fields and bits in the structures of this
 hypercall allow for many future extensions without breaking existing callers.
 
-Future extensions could include support for claims on superpages, claims for
-requests with :c:macro:`MEMF_no_refcount`, which allocate P2M, HAP and so on.
+Current claims are measured in base pages and already admit and redeem
+high-order allocations where a suitable buddy exists. They do not reserve
+contiguous extents or guarantee a particular superpage size. A future
+extent-aware reservation would require more than the current page counters.
+
+Another possible extension is support for requests with
+:c:macro:`MEMF_no_refcount`, such as P2M and HAP allocations. Those requests
+currently receive no domain-claim credit and do not redeem claims.
 
 See :ref:`designs/claims/protection:Callers using MEMF_no_refcount`
 for more information.

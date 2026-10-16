@@ -11,11 +11,13 @@ Claimed memory must be protected from allocations without applicable claims
 while remaining available to allocations with applicable claims.
 
 Claims exist as long as they are outstanding, which is from the moment they
-are installed until they are redeemed by allocations.
+are installed until they are redeemed by allocations or explicitly released.
+Domain destruction also releases outstanding claims.
 
-During this time, they are a commitment of memory to a domain, and the
-hypervisor must ensure that this commitment is respected by protecting
-claimed memory from being allocated without redeeming applicable claims.
+While memory remains online, claims are a commitment of memory to a domain.
+The allocator protects claimed pages from allocations that cannot redeem the
+applicable claims. Offlining can reduce available memory below claims, so it
+can invalidate the original reservation guarantee.
 
 Redeeming claims is the process of applying a portion of the claims of
 a domain to an allocation to allow the allocation to proceed by exchanging
@@ -46,6 +48,9 @@ Reference-counting of allocations
 *********************************
 
 Claims protection distinguishes between two kinds of allocation requests.
+Here, "reference-counted" refers to charging the allocation to the domain's
+normal page limit and redeeming its claims, not to whether the returned pages
+have page references or an owner.
 
 Reference-counted requests
 ==========================
@@ -58,25 +63,28 @@ total memory allocation, and the domain's claims can be used
 to protect and redeem the allocation using claims.
 
 For example, the allocation requests by :term:`domain builders` for the
-:term:`guest physical memory` of domains are always reference-counted,
-and as such, can be protected and redeemed by claims to the extent
-the claims are applicable and sufficient for the allocation.
+:term:`guest physical memory` normally use ref-counted domain-heap allocations,
+which can redeem claims. Population modes that do not allocate new domain-heap
+pages, such as populate-on-demand placeholders or direct-mapped memory, do not
+necessarily follow that allocation and redemption path.
 
 Not reference-counted requests
 ==============================
 
-This means that the request is not for a domain, or the :c:type:`memflags`
+This means that the request is not for a domain, or the ``memflags``
 of the request includes :c:macro:`MEMF_no_refcount`.
 
-In this case, the request is not reference-counted to a domain's
-memory allocation state, and as part of that, claims of a domain
-cannot be used to protect and redeem the allocation using claims.
+Such requests are not charged to the domain's normal page limit and receive
+no credit from its claims. This does not necessarily make the pages unowned:
+``alloc_domheap_pages()`` can assign them to the domain as ``PGC_extra`` pages.
+They then contribute to both ``d->tot_pages`` and ``d->extra_pages``, leaving
+``domain_tot_pages(d)`` unchanged, and still have ordinary page references.
+``MEMF_no_owner`` separately suppresses ownership assignment and also implies
+``MEMF_no_refcount`` on this allocation path.
 
-As such, the allocation request is not protected and redeemed by claims and
-the allocator does not consider claims to check whether the request can
-be satisfied, so the request can only be satisfied using unclaimed memory.
-
-Therefore, such requests can only be satisfied using unclaimed memory.
+Such requests receive no credit from a domain's claims and do not redeem
+them. The allocator still checks global and per-node claims to protect
+other reservations, so these requests can use only unclaimed memory.
 
 Callers using MEMF_no_refcount
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -93,7 +101,7 @@ in the context of domains include:
 
 Example actions happening at runtime on the request of running domains
 which use :c:macro:`MEMF_no_refcount` or :c:macro:`MEMF_no_owner` to
-bypass reference-counting include:
+avoid charging replacement allocations as additional domain memory include:
 
 - ``memory_exchange()`` for exchanging memory pages of a domain.
 - ``gnttab_transfer()`` for transferring pages between domains.
@@ -102,8 +110,7 @@ bypass reference-counting include:
 Claim protection checks
 ***********************
 
-Unless the request is an exact-node request for a node-specific claim,
-the allocator performs two protective checks to protect claimed memory
+The allocator performs two protective checks to protect claimed memory
 from being allocated to other domains while still allowing the claiming
 domain to allocate it.
 
@@ -133,9 +140,10 @@ claims which are part of the total pool of the claims on the entire host.
    This is the common case, especially for smaller allocations and when the
    host is not under heavy memory pressure and not fully-claimed.
 
-If the request cannot proceed based on the unclaimed memory, it is under
-heavy memory pressure as the unclaimed memory is very low, which is where
-the protection of claims becomes critical.
+If the request exceeds unclaimed memory, the fallback check protects claims.
+This need not imply high physical memory usage: free pages may simply be
+reserved by other builders, or a large contiguous request may exceed the
+currently unclaimed count.
 
 In these situations, the allocator needs to ensure that the domain has
 enough claims to redeem the claimed memory to satisfy this request,
@@ -144,8 +152,9 @@ otherwise the request has to fail:
 1. If the request is not for a domain or the request is disabling reference
    counting, the request fails.
 
-2. If the total claims of the domain (:c:member:`domain.outstanding_claims`)
-   cover the amount of claims needed to satisfy the request,
+2. If the total claims of the domain (:c:member:`domain.outstanding_pages`)
+   cover the entire allocation request, not merely the shortfall
+   after unclaimed pages are counted,
    the allocation can proceed further. Else, the request fails.
 
 Protection of node-specific claims
@@ -161,40 +170,36 @@ node's suitability [2]_ for this request:
 1. Get the number of unclaimed memory available on that node using the
    free pages on that NUMA node (``node_avail_pages[node]``) minus the
    total amount of claimed memory across all domains for that node
-   (``node_outstanding_claims[node]``).
+   (``node_claimed_pages[node]``). If offlining has reduced available memory
+   below claims, the result is clamped to zero.
 
 2. If the request can be satisfied by the sum of the unclaimed memory
-   on that node and the claims of the domain for that node, the allocation
+   on that node and, for ref-counted domain requests only, the domain's claim
+   on that node, the allocation
    can proceed on that node, else this node cannot satisfy this request.
 
-3. If the allocation is an exact-node request, or the allocator
-   has no further nodes to consider, the allocation fails.
+3. If the allocation specifies a particular node with ``MEMF_exact_node``,
+   or the allocator has no further permitted nodes to consider, it fails.
+   Without a particular requested node, ``MEMF_exact_node`` prevents fallback
+   outside the preferred node mask rather than restricting the search to one
+   arbitrary node.
 
 4. Else, if the allocator has to consider further nodes for this request,
    the allocator continues to repeat the same process for the next node.
 
 .. rubric:: Footnotes
 
-.. [1] In principle, the host-wide check for the protection of host-wide claims
-       could be skipped for node-exact requests that are reference-counted and
-       covered by the claims of the domain for that node. The added code for
-       This additional check would add complexity to the code, and as long as
-       Xen must track global memory counters, those counters would still need
-       to be accessed for all requests, so the added code could only delay the
-       access to those global counters while adding more checks to all other
-       requests. Therefore, that's not considered beneficial for now.
+.. [1] A ref-counted exact-node request fully covered by the domain's claim
+   on that node also satisfies the global claim-coverage fallback.
+   Checking that first could avoid the global free-versus-claimed
+   comparison, but successful allocations still update global free-page
+   and claim counters under :c:var:`heap_lock`. Such a shortcut would not
+   itself remove the lock or enable concurrent frees. This series keeps
+   the common admission path; it does not implement or benchmark this
+   alternative. Finer-grained locking requires a separate allocator design.
 
-       However, if we want to replace the global :c:var:`heap_lock` serving
-       as a global synchronisation point for all memory allocations with
-       finer-grained (per-node) locks in the future, then this check could be
-       added to allow more concurrency for node-exact allocations (and all
-       free_page() calls) while still protecting claims, but that would be a
-       future project, requiring significant changes to the code.
-
-.. [2] If the request is reference-counted and the request is covered by
-       the claims of the domain for that node, the request could proceed.
-       But that would add complexity to the code, and as long as Xen must track
-       per-node memory counters, those counters would still need to be updated
-       for all allocations from this node, so the added code could only delay
-       the access to those per-node counters while adding more checks to all
-       other requests. Therefore, that's not considered beneficial for now.
+.. [2] A ref-counted request covered by the domain's claim on the candidate
+   node could pass node-level claim admission without computing the
+   unclaimed portion. It would still need a suitable buddy block and
+   updates to node free-page and claim counters. No such fast path or
+   measured performance benefit is part of this series.

@@ -1,35 +1,24 @@
 %% SPDX-License-Identifier: CC-BY-4.0
-%% Claim variables and their Invariants
+%% Accounting identities and conditional capacity bounds
 flowchart TD
 
-subgraph "Access&nbsp;under&nbsp;the&nbsp;<tt><b>heap_lock</b></tt>&nbsp;only:"
-   direction TB
-   Memory_of_Nodes --"&nbsp; Contribute to &nbsp;"--> Overall_Memory
-   Overall_Memory --"&nbsp; Available to &nbsp;"--> Memory_of_Domains
+subgraph Accounting["Claims identities protected by heap_lock"]
+    entries["d->claims[n]: outstanding pages on node n"]
+    subtotal["d->node_claims = sum of d->claims[n]"]
+    total["d->outstanding_pages = node subtotal + host-wide claim"]
+    nodes["node_claimed_pages[n] = sum of domains' claims on node n"]
+    host["outstanding_claims = sum of domains' outstanding_pages"]
+    entries --> subtotal --> total --> host
+    entries --> nodes
 end
-
-subgraph Memory_of_Nodes["Per-node claims and available memory"]
-    direction LR
-    per_node_claims -->|"&nbsp; less or equal to &nbsp;"| node_avail_pages
-    per_node_claims["Claims on the node:
-                     <tt>node_outstanding_claims[n]"]
-    node_avail_pages["Available pages on the node:
-                      <tt>node_avail_pages[n]"]
+subgraph Capacity["Capacity bounds: offlining can invalidate these"]
+    node_free["node_avail_pages[n]: free pages including claimed pages"]
+    host_free["total_avail_pages: free pages across all nodes"]
+    nodes -->|"at most"| node_free
+    host -->|"at most"| host_free
 end
-
-subgraph Overall_Memory["Overall claims and available memory"]
-    direction LR
-    outstanding -->|"&nbsp; less or equal to &nbsp;"| avail_pages
-    outstanding["Total claims on the host:
-                 <tt>outstanding_claims"]
-    avail_pages["Available pages on the host:
-                 <tt>total_avail_pages"]
-end
-
-subgraph Memory_of_Domains["Per-domain&nbsp;claims and available memory"]
-    direction LR
-    claims -->|"&nbsp; less or equal to &nbsp;"| available_memory_for_domains
-    claims["Claims of the domain:<br><tt>d->outstanding_pages"]
-    available_memory_for_domains["Available pages:<br><tt>node_avail_pages[n]
-                                                          total_avail_pages"]
+subgraph DomainLimit["Installation check under page_alloc_lock"]
+    allowance["domain_tot_pages(d) + requested claims must fit max_pages"]
+    qualification["Builder must serialize allocations awaiting assignment"]
+    allowance --- qualification
 end

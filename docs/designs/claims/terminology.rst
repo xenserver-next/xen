@@ -10,25 +10,25 @@ Terminology
  claims
   Reservations of memory for :term:`domains` that are installed by
   :term:`domain builders` before :term:`populating` the domain's memory.
-  Claims ensure that the reserved memory remains available for the
-  :term:`domains` when allocating it, even if other :term:`domains` are
-  allocating memory at the same time.
+  While that memory remains online, claims protect the reservation against
+  allocations by other :term:`domains`.
 
  claim set
-  An array of :c:type:`memory_claim_t` entries, each specifying a page count
-  and a target (either a NUMA node ID or a special value for host-wide claims),
-  that can be installed atomically for a domain to reserve memory on multiple
-  NUMA nodes. The chapter on :ref:`designs/claims/installation:claim sets`
-  provides further information on the structure and semantics of claim sets.
+  An array of :c:type:`xen_domctl_memory_claim_t` entries, each specifying a
+  page count and a target (a NUMA node ID or the host-wide target constant).
+  A non-empty set is installed atomically for a domain with no outstanding
+  claims during domain creation. An empty set releases outstanding claims.
+  See :ref:`designs/claims/installation:claim sets` for details.
 
  claim set installation
  installing claim sets
  installing claims
-  The process of validating and installing a claim set for a domain under
+  The process of validating and installing a claim set under
   :c:member:`domain.page_alloc_lock` and :c:var:`heap_lock`, ensuring that
-  either the entire set is accepted and installed, or the request fails with
-  no side effects.
-  The chapter on :ref:`designs/claims/installation:claim set installation`
+  either the entire set is installed or the request fails without changing
+  the claims. Non-empty sets cannot replace existing claims.
+  The chapter on
+  :ref:`designs/claims/installation:NUMA-aware claims installation`
   provides further information on the structure and semantics of claim sets.
 
  domain builders
@@ -81,12 +81,13 @@ Terminology
   A grouping of CPUs and memory in a NUMA architecture. NUMA nodes have
   varying access latencies to memory, and NUMA-aware claims allow
   :term:`domain builders` to reserve memory on specific NUMA nodes
-  for performance reasons. Platform firmware configures what constitutes
-  a NUMA node, and Xen relies on that configuration for NUMA-related features.
+  for performance reasons. This design uses Xen's host NUMA topology and
+  node numbering, normally discovered from platform topology information.
 
-  When this design refers to NUMA nodes, it is referring to the NUMA nodes
-  as defined by the platform firmware and exposed to Xen, initialized at boot
-  time and not changing at runtime (so far).
+  Claim targets are Xen host-node IDs, not guest vNUMA node IDs. Population
+  requests using ``XENMEMF_vnode`` translate a guest node through the domain's
+  configured virtual-to-host node mapping. The claims interface performs no
+  such translation; builders must select host-node targets themselves.
 
   The NUMA node ID is a numeric identifier for a NUMA node, used whenever code
   specifies a NUMA node, such as the target of a claim or indexing into arrays
@@ -94,10 +95,8 @@ Terminology
 
   NUMA node IDs start at 0 and are less than :c:macro:`MAX_NUMNODES`.
 
-  Some NUMA nodes may be offline, and the :c:var:`node_online_map` is used
-  to track which nodes are online. Currently, Xen does not support hotplug
-  of NUMA nodes, so the set of online NUMA nodes is determined at boot time
-  based on the platform firmware configuration and does not change at runtime.
+    Some NUMA nodes may be offline. The :c:var:`node_online_map` tracks which
+    nodes are online, and claim installation only accepts online node targets.
 
  NUMA node affinity
   The preference of a :term:`domain` for a set of NUMA nodes, which can
@@ -113,10 +112,15 @@ Terminology
   by domain builders.
 
  guest physical memory
+  The memory addressed through the domain's guest physical address space.
+  Guest physical addresses need not equal host machine addresses; the
+  :term:`physmap` describes the mapping between them.
+
  physmap
-  The mapping of a domain's guest physical memory to the host's
-  machine address space. The :term:`physmap` defines how the guest's
-  physical memory corresponds to the actual memory locations on the host.
+  The domain's physical-to-machine mapping, relating guest physical frame
+  numbers to host machine frames. It is the mapping, not a synonym for the
+  guest physical memory itself. Population establishes entries in this map;
+  populate-on-demand can initially record placeholders instead of new frames.
 
  populating
   The process of allocating and mapping physical memory for a domain's guest
@@ -133,6 +137,6 @@ Terminology
 
  Xenctrl
   An OCaml library provided by Xen for :term:`domain builders` running
-  in privileged :term:`domains` to interact with the hypervisor, including
-  making hypercalls to install claims and :term:`populating`
-  :term:`guest physical memory`.
+  in privileged :term:`domains` to interact with the hypervisor. This series
+  adds C libxenctrl set/get wrappers; it does not add corresponding OCaml
+  bindings for the new per-node claims operations.

@@ -3,6 +3,11 @@
 Performance
 ***********
 
+These product observations concern an earlier single-node implementation and
+its surrounding toolstack integration, not a benchmark of the v8 multi-node
+API. They do not isolate claims from other placement changes or establish a
+performance guarantee for this series.
+
 The single-node claims implementation which is the basis of the
 NUMA claims v4 series and the multi-node claim sets design forms
 the groundwork for the NUMA design and implementation in XenServer 9.

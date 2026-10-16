@@ -8,8 +8,8 @@ participant NUMA Node memory
 Toolstack->>Xen: XEN_DOMCTL_createdomain
 Toolstack->>Xen: XEN_DOMCTL_max_mem(max_pages)
 
-Toolstack->>Xen: XEN_DOMCTL_claim_memory(pages, node)
-Xen->>NUMA Node memory: Claim pages on node
+Toolstack->>Xen: XEN_DOMCTL_set_memory_claims(claims)
+Xen->>NUMA Node memory: Validate node and host availability
 Xen-->>Toolstack: Claim granted
 
 Toolstack->>Xen: XEN_DOMCTL_set_nodeaffinity(node)
@@ -19,5 +19,6 @@ loop Populate domain memory
     Xen->>NUMA Node memory: alloc from claimed node
 end
 
-Toolstack->>Xen: XEN_DOMCTL_claim_memory(0, NO_NODE)
+Toolstack->>Xen: XEN_DOMCTL_set_memory_claims(empty)
 Xen-->>Toolstack: Remaining claims released
+Note over Toolstack,Xen: Any claims still outstanding are released when domain creation finishes

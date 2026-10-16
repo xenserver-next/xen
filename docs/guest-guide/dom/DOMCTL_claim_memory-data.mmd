@@ -1,43 +1,43 @@
 %% SPDX-License-Identifier: CC-BY-4.0
 classDiagram
 class do_domctl["Args passed to <tt>do_domctl()</tt>"] {
-    +uint32_t cmd: XEN_DOMCTL_claim_memory
+    +uint32_t cmd: XEN_DOMCTL_set/get_memory_claims
     +uint32_t domain: Domain ID
-    +xen_domctl_claim_memory: Claim set
+    +xen_domctl_memory_claims: Claim entries and count
 }
-class xen_domctl_claim_memory["Claim set passed to <tt>do_domctl()</tt>"] {
-    +memory_claim_t* claims: Claim entries
-    +uint32_t nr_claims: Number of claim entries
-    +uint32_t pad: always 0 for future use
+class xen_domctl_memory_claims["Claims argument passed to <tt>do_domctl()</tt>"] {
+    +xen_domctl_memory_claim_t* claims: Claim entries
+    +uint32_t nr_claims: Entry count or capacity
+    +uint32_t pad: Must be zero
 }
-class memory_claim_t["Claim set: Array of claim entries"] {
+class xen_domctl_memory_claim_t["Claim set: Array of claim entries"] {
     +pages: Pages to claim
-    +node: Claim selector or node
-    +pad: always 0 for future use
+    +target: NUMA node or host-wide target
+    +pad: Must be zero
 }
-class xc_domain_claim_memory["xc_domain_claim_memory()"] {
+class xc_domain_set_memory_claims["xc_domain_set_memory_claims()"] {
     +xc_interface* xch
     +uint32_t domid
     +uint32_t nr_claims
-    +memory_claim_t* claims
+    +xen_domctl_memory_claim_t* claims
 }
 class outstanding_pages["Total claims of domains"] {
-    global free = total_avail_pages - outstanding_claims
-    node free = node_avail_pages[node] - node_outstanding_claims[node]
+    global free = max(total_avail_pages - outstanding_claims, 0)
+    node free = max(node_avail_pages[node] - node_claimed_pages[node], 0)
 }
-class claim["XEN_DOMCTL_claim_memory"] {
-    +domain_set_outstanding_pages()
-    +domain_set_node_claims()
+class claim["XEN_DOMCTL_set_memory_claims"] {
+    +domain_set_claims()
+    +domain_get_claims()
 }
 class domain["Claim fields in struct domain"] {
     +outstanding_pages - Total outstanding claims of the domain
     +node_claims - Sum of claims on all nodes of the domain
-    +claims[] - Array of claims on specific nodes
+    +claims - Dynamically allocated per-node array or NULL
 }
-xen_domctl_claim_memory o--> memory_claim_t
-do_domctl o--> xen_domctl_claim_memory
-xc_domain_claim_memory ..> do_domctl: passes<br> <tt>Claim set</tt>
-xc_domain_claim_memory ..> claim : calls <tt>do_domctl()</tt>
-claim ..> xen_domctl_claim_memory : reads
+xen_domctl_memory_claims o--> xen_domctl_memory_claim_t
+do_domctl o--> xen_domctl_memory_claims
+xc_domain_set_memory_claims ..> do_domctl: passes<br> <tt>Claim set</tt>
+xc_domain_set_memory_claims ..> claim : calls <tt>do_domctl()</tt>
+claim ..> xen_domctl_memory_claims : reads or writes
 claim ..> domain : sets
 domain ..> outstanding_pages : updates outstanding claims

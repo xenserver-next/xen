@@ -23,127 +23,71 @@ This section describes the functions and data structures involved in
 :term:`installing claims` for domains, and the internal functions for
 validating and installing claim sets.
 
- .. c:function:: int domain_set_outstanding_pages(domain, pages)
+.. c:function:: int domain_set_claims(domain, request)
 
-    This function is replaced by :c:func:`domain_set_claim_entries()`.
-
- .. c:function:: int domain_set_claim_entries(domain, nr_entries, claim_set)
-
-    :param domain: The domain for which to set the node claims
-    :param nr_entries: The number of claims in the claim set
-    :param claim_set: The claim set to install for the domain
+    :param domain: The domain for which to set the claims
+    :param request: The claim entries and derived page totals
     :type domain: struct domain *
-    :type nr_entries: unsigned int
-    :type claim_set: memory_claim_t *
+    :type request: struct claim_request *
     :returns: 0 on success, or a negative error code on failure.
 
-    Handles :term:`installing claim sets`. It performs validation of the
-    :term:`claim set` and updates the domain's claims accordingly.
+    Installs a non-empty claim set for a domain that has no outstanding
+    claims. The domctl handler rejects requests after domain creation has
+    finished. The domain builder must serialize installation with allocations
+    for the domain, including completion of allocation continuations.
 
-    The function works in four phases:
+    The operation validates entries and computes total and per-node page
+    counts, allocates a zeroed per-node array if needed, then checks memory
+    availability and installs the state under :c:var:`heap_lock`. Each entry
+    must request at least one page, have zero padding, and target a unique
+    online node or :c:macro:`XEN_DOMCTL_MEMORY_CLAIM_TARGET_HOST`. The request
+    total plus the domain's existing allocation must fit within
+    :c:member:`domain.max_pages`. Global unclaimed memory must cover the sum
+    of all entries, including node claims, and each targeted node's unclaimed
+    memory must cover that node's entry. A domain with outstanding claims is
+    rejected with ``-EINVAL``; existing claims are not replaced.
 
-     1. Validate claim entries and check node-specific claims availability
-     2. Validate the host-wide request against the remaining availability
-     3. Reset any current claims of the domain
-     4. Install the claim set as the domain's claiming state
+.. c:function:: int domain_get_claims(domain, request)
 
-    Phase 1 checks claim entries for validity and memory availability:
-
-     5. Target must be :c:macro:`XEN_DOMCTL_CLAIM_MEMORY_TOTAL` or a node.
-     6. Each target node may only appear once in the claim set.
-     7. For node-specific claims, requested pages must not exceed the
-        available memory on that node after accounting for existing claims.
-     8. The explicit padding field must be zero for forward compatibility.
-
-    Phase 2 checks:
-
-     9. The total sum of the requested pages must not exceed the total
-        unclaimed memory of the host after accounting for existing claims.
-     10. The claims must not exceed the :c:member:`domain.max_pages` limit.
-         See :doc:`accounting` and :doc:`redeeming` for the accounting
-         checks that enforce the domain's :c:member:`domain.max_pages` limit.
-
-    .. versionadded:: claims-v5
-
- .. c:function:: int domain_get_claim_entries(domain, nr_entries, claim_set)
-
-    :param domain: The domain for which to retrieve a claim set
-    :param nr_entries: The number of claims in the claim set
-    :param claim_set: The preallocated buffer for up to nr_entries claim entries
-    :type domain: struct domain *
-    :type nr_entries: unsigned int *
-    :type claim_set: memory_claim_t *
+    :param domain: The domain whose claims are retrieved
+    :param request: Entry buffer and its capacity; updated with the required
+                         number of entries
+    :type domain: const struct domain *
+    :type request: struct claim_request *
     :returns: 0 on success with nr_entries updated to the number of claims
-              written to the buffer, or a negative error code on failure.
+                written to the buffer, or a negative error code on failure.
 
-    Retrieves a claim set for the current claims of the domain and writes
-    it to the provided buffer. The number of claims written to the buffer
-    is stored in the variable pointed to by ``nr_entries``.
+    Retrieves the host-wide claim first, followed by per-node claims in
+    ascending node order. The input count is the buffer capacity; on
+    ``-ENOBUFS``, it is updated to the number of entries required.
+    The helper can fill a private prefix before returning ``-ENOBUFS``;
+    the domctl handler does not copy that prefix to the guest. Snapshotting
+    takes :c:var:`heap_lock`, while the domctl's RCU reference protects the
+    domain's lifetime. No domctl lock is required for get.
 
-    ``nr_entries`` specifies the size of the provided buffer for claim
-    entries, and the function writes up to that many claim entries to
-    the buffer. If the buffer is too small to hold all claim entries,
-    the function returns -:c:macro:`ERANGE` and updates ``nr_entries``
-    to the number of entries needed to hold all claim entries.
+*************
+Claim release
+*************
 
- .. versionadded:: claims-v7
+Claims are released by passing an empty set to the set domctl. This reaches
+:c:func:`domain_set_outstanding_pages()` with a zero page count, which removes
+both host-wide and per-node claims and detaches the per-node array for freeing
+after :c:var:`heap_lock` is released. The legacy
+:c:macro:`XENMEM_claim_pages` path continues to use
+:c:func:`domain_set_outstanding_pages()` for its existing interface.
 
-************************************
-Helper functions for managing claims
-************************************
+Domain destruction also releases claims through this helper. The independent
+creation-cleanup patch calls it when controller unpause first reduces the
+pause count to zero, before architecture finalization and guest execution,
+to release leftover build claims. That
+one-time cleanup does not prohibit later legacy ``XENMEM_claim_pages`` calls.
+It is not a prerequisite for the eight-patch NUMA-claims interface.
 
- .. c:function:: unsigned long domain_release_host_claims(domain, release)
-
-    :param domain: The domain for which to release host-wide claims
-    :param release: The number of pages to release
-    :type domain: struct domain *
-    :type release: unsigned long
-    :returns: The number of host-wide pages actually deducted from the domain.
-
-    This function releases the specified number of host-wide claims.
-    It limits the release to the number of host-wide claims actually held by
-    the domain and updates the overall claim state accordingly.
-
-    .. versionadded:: claims-v4
-
- .. c:function:: unsigned long domain_release_node_claims(domain, node, release)
-
-    :param domain: The domain for which to release the node claims
-    :param node: The node for which to release the claim
-    :param release: The number of pages to release from the claim
-    :type domain: struct domain *
-    :type node: nodeid_t
-    :type release: unsigned long
-    :returns: The number of pages actually deducted from the domain's claim.
-
-    This function deducts a specified number of pages from a domain's
-    claim on a specific node. It limits the release to the number of
-    pages actually claimed by the domain on that node and updates the
-    node-local claims currently held by the domain on that node,
-    and it updates the host-wide and node-specific claim state accordingly.
-
-    .. versionadded:: claims-v5
-
- .. c:function:: void domain_recall_node_claims(domain, recall)
-
-    :param domain: The domain for which to recall node claims
-    :param recall: The number of node-specific pages to recall
-    :type domain: struct domain *
-    :type recall: unsigned long
-
-    This function recalls the specified number of node-specific claims
-    from the domain and updates the overall claim state accordingly.
-
-    It iterates over the domain's node-specific claims, calls
-    :c:func:`domain_release_node_claims()` to up to the given pages from
-    the node claims until the specified number of pages has been recalled,
-    or all node-specific claims have been exhausted.
-
-    This function is used to recall node-specific claims from a domain when
-    offlining memory or when pages for a domain are allocated on other
-    nodes than the claimed node.
-
-    .. versionadded:: claims-v5
+Both new domctls pass through the ordinary privileged domctl authorization
+check before accessing claim entries. Under FLASK, set and release require
+``domain2:setclaim``; get requires ``domain:getdomaininfo``. Sharing that
+FLASK permission does not grant the old getdomaininfo operation's separate
+dummy-XSM exception to the new get operation.
 
 **********************
 Allocation with claims
@@ -159,14 +103,23 @@ The functions below play a key role in allocating memory for domains.
     :param extents: Number of extents
     :param order: Order of the extents
     :param mem_flags: Allocation flags
-    :param extent_start: Starting PFN
+    :param extent_start: Array of guest frame numbers identifying the bases
+                         of the extents to populate
     :type xch: xc_interface *
     :type domid: uint32_t
     :type extents: unsigned long
     :type order: unsigned int
     :type mem_flags: unsigned int
     :type extent_start: xen_pfn_t *
-    :returns: 0 on success, or a negative error code on failure.
+    :returns: The number of extents populated, possibly fewer than requested,
+              or -1 with errno set on failure.
+
+    For ordinary population of a non-translated domain, completed entries
+    are replaced with machine frame numbers. With translated paging, Xen
+    installs the mappings without overwriting the input guest frame numbers.
+    Populate-on-demand records placeholders rather than returning newly
+    allocated machine frames. Do not interpret every successful result as
+    an array of host MFNs.
 
     This function is a wrapper for the ``XENMEM_populate_physmap`` hypercall,
     which is handled by the :c:func:`populate_physmap()` function in the
@@ -174,9 +127,10 @@ The functions below play a key role in allocating memory for domains.
     :term:`guest physical memory` of a domain. :term:`domain builders` can
     set the :term:`NUMA node affinity` and pass the preferred node to this
     function to steer allocations towards the preferred NUMA node(s) and let
-    :term:`claims` ensure that the memory will be available even in cases
-    of :term:`parallel domain builds` where multiple domains are being built
-    at the same time.
+    :term:`claims` reserve the page counts against competing allocations during
+    :term:`parallel domain builds`. Successful population still depends on
+    suitable extents, address constraints, and other resources; the wrapper
+    can return a short count.
 
 The :term:`meminit` API calls :c:func:`xc_domain_populate_physmap()`
 for populating the :term:`guest physical memory`. It invokes the restartable
@@ -193,16 +147,22 @@ for populating the :term:`guest physical memory`. It invokes the restartable
     :c:func:`alloc_domheap_pages()`, which forwards the request to
     :c:func:`alloc_heap_pages()`.
 
-    During domain creation, it adds the :c:macro:`MEMF_no_scrub` flag to the request
-    for populating the :term:`physmap` to optimise domain startup by allowing
-    the use of unscrubbed pages.
+    On the ordinary domain-heap path during creation, it adds
+    :c:macro:`MEMF_no_scrub` and ``MEMF_keep_scrub`` to the request.
+    This permits allocation of unscrubbed pages while retaining their
+    per-page scrub markers and deferring assignment to the domain.
 
-    When that happens, it scrubs the pages as needed using hypercall
-    continuation to avoid long hypercall latency and watchdog timeouts.
+    When that happens, it uses deferred scrubbing and scrubs the pages
+    as needed using hypercall continuation to avoid long hypercall
+    latency and watchdog timeouts. Only after scrubbing does it assign the
+    pages to the domain. A preempted scrub can therefore retain allocated,
+    already-redeemed pages that are not yet counted by ``domain_tot_pages()``.
 
-    Domain builders can optimise on-demand scrubbing by running
-    :term:`physmap` population pinned to the domain's NUMA node,
-    keeping scrubbing local and avoiding cross-node traffic.
+    A builder can improve scrubbing locality by running the population call
+    on a CPU local to the memory being populated. CPU pinning alone does not
+    force allocations onto that node; allocation flags, affinity, and fallback
+    still determine the actual memory node. Deferred scrubbing here is not
+    the same operation as populate-on-demand.
 
 .. c:function:: struct page_info *alloc_heap_pages(unsigned int zone_lo, \
                                                    unsigned int zone_hi, \
@@ -223,56 +183,42 @@ for populating the :term:`guest physical memory`. It invokes the restartable
     :returns: The allocated page_info structure, or NULL on failure
 
     This function allocates a contiguous block of pages from the heap.
-    It checks claims and available memory before attempting the
-    allocation. On success, it updates relevant counters and redeems
-    claims as necessary.
+    Under :c:var:`heap_lock`, it checks whether claimed memory leaves enough
+    memory for the request, then searches for a suitable block. On success it
+    updates the free-page counters and redeems applicable claims.
 
-    It first checks whether the request can be satisfied given the domain's
-    claims and available memory using :c:func:`claims_permit_request()`.
-    If claims and availability permit the request, it calls
-    :c:func:`get_free_buddy()` to find a suitable block of free pages
-    while respecting node and zone constraints.
+    Its claims-related sequence is:
 
-    Simplified pseudocode of its logic:
+    1. Take :c:var:`heap_lock` and perform global admission. If unclaimed
+       pages do not cover the whole request, only a ref-counted request for
+       a domain whose outstanding claims cover the whole request may proceed.
+       The check does not combine a partial claim with unclaimed pages.
+    2. Find a buddy using :c:func:`get_free_buddy()`, retrying with unscrubbed
+       pages permitted when appropriate. Split the buddy to the requested order.
+    3. Decrement zone, node, and global free-page counters.
+    4. For a domain with outstanding claims and without ``MEMF_no_refcount``,
+       redeem ``min(d->outstanding_pages, request)`` pages in actual-node,
+       host-wide, then other-node order.
+    5. Complete page-state updates and drop the heap lock. Required TLB
+       flushing and scrubbing happen afterwards. Assignment to the domain
+       happens later in the caller, not inside this critical section.
 
-.. code:: C
-
-    struct page_info *alloc_heap_pages(unsigned int zone_lo,
-                                       unsigned int zone_hi,
-                                       unsigned int order,
-                                       unsigned int memflags,
-                                       struct domain *d) {
-        /* D's claims and available memory need to permit the request. */
-        if (!claims_permit_request(1UL << order, total_avail_pages, memflags,
-                                   NUMA_NO_NODE, d,  outstanding_claims))
-            return NULL;
-
-        /* Find a suitable buddy block. Pass the zone range, order and
-         * memflags so the helper can apply node and zone selection. */
-        pg = get_free_buddy(zone_lo, zone_hi, order, memflags, d);
-        if (!pg)
-            return NULL;
-
-        redeem_claims_for_allocation(d, 1UL << order, node_of(pg));
-        update_counters_and_stats(d, order);
-        if (pg_has_dirty_pages(pg))
-            scrub_dirty_pages(pg);
-        return pg;
-    }
-
-.. c:function:: struct page_info *get_free_buddy(zone_lo, zone_hi, order, \
-                                                 memflags, domain)
+.. c:function:: struct page_info *get_free_buddy(unsigned int zone_lo, \
+                                                 unsigned int zone_hi, \
+                                                 unsigned int order, \
+                                                 unsigned int memflags, \
+                                                 const struct domain *d)
 
     :param zone_lo: The lowest zone index to consider for allocation
     :param zone_hi: The highest zone index to consider for allocation
     :param order: The order of the pages to allocate (2^order pages)
     :param memflags: Flags for conducting the allocation
-    :param domain: domain to allocate memory for or NULL
+    :param d: The domain to allocate memory for or NULL
     :type zone_lo: unsigned int
     :type zone_hi: unsigned int
     :type order: unsigned int
     :type memflags: unsigned int
-    :type domain: struct domain *
+    :type d: const struct domain *
     :returns: The allocated page_info structure, or NULL on failure
 
     This function finds a suitable block of free pages in the buddy
@@ -283,111 +229,46 @@ for populating the :term:`guest physical memory`. It invokes the restartable
     that satisfies the request. It checks node-local claims before
     attempting allocation from a node.
 
-    Using :c:func:`claims_permit_request()`, it checks whether the node
-    has enough unclaimed memory to satisfy the request or whether the
-    domain's claims can permit the request on that node after accounting
-    for outstanding claims.
+    For each candidate node, it checks whether unclaimed memory and the
+    domain's claim on that node can satisfy the request. The per-node
+    availability calculation is clamped at zero if claims exceed available
+    memory after offlining.
 
     If the node can satisfy the request, it searches for a suitable block
     in the specified zones. If found, it returns the block; otherwise it
-    tries the next node until all online nodes are exhausted.
+    tries another node while the normal affinity and exact-node policy permit.
 
-    Simplified pseudocode of its logic:
+    Own-node credit is added only for a domain's ref-counted request with an
+    attached claims array. Anonymous and ``MEMF_no_refcount`` requests receive
+    no credit. A host-wide claim does not provide node-specific credit.
 
-.. code:: C
-
-    /*
-     * preferred_node_or_next_node() represents the policy to first try the
-     * preferred/requested node then fall back to other online nodes.
-     */
-    struct page_info *get_free_buddy(unsigned int zone_lo,
-                                     unsigned int zone_hi,
-                                     unsigned int order,
-                                     unsigned int memflags,
-                                     const struct domain *d) {
-        nodeid_t request_node = MEMF_get_node(memflags);
-
-        /*
-         * Iterate over candidate nodes: start with preferred node (if any),
-         * then try other online nodes according to the normal placement policy.
-         */
-        while (there are more nodes to try) {
-            nodeid_t node = preferred_node_or_next_node(request_node);
-            unsigned long avail_pages = node_avail_pages[node] -
-                                        node_outstanding_claims[node]
-                                        + ((d && !(memflags & MEMF_no_refcount))
-                                           ? d->claims[node] : 0);
-
-            /* Ensure the target node and the claims permit can this allocation */
-            if ( avail_pages < (1UL << order) )
-                goto next_node;
-
-            /* Find a zone on this node with a suitable buddy */
-            for (int zone = highest_zone; zone >= lowest_zone; zone--)
-                for (int j = order; j <= MAX_ORDER; j++)
-                    if ((pg = remove_head(&heap(node, zone, j))) != NULL)
-                        return pg;
-         next_node:
-            if (request_node != NUMA_NO_NODE && (memflags & MEMF_exact_node))
-                return NULL;
-            /* Fall back to the next node and repeat. */
-        }
-        return NULL;
-    }
-
-.. note:: The actual implementation includes additional details
-   but the pseudocode captures the core logic of checking claims
-   and available memory while searching for a suitable buddy.
+    Claims do not override zone limits, buddy fragmentation, scrub eligibility,
+    or exact-node constraints. With a specific requested node and
+    ``MEMF_exact_node``, failure on that node ends the search. Without a
+    specific node, exact-node flags restrict fallback to the preferred mask
+    rather than selecting an arbitrary single node.
 
 **************************************
 Offlining memory in presence of claims
 **************************************
 
-When offlining pages, Xen must ensure that available memory on a node
-and the total number of free pages does not fall below their respective
-outstanding claims. If it does, Xen recalls claims from domains until
-accounting is valid again.
-
-This is triggered by privileged domains via the
-``XEN_SYSCTL_page_offline_op`` sysctl or by machine-check memory errors.
-
-Offlining currently allocated pages cannot remove those in-use pages from
-circulation. They are marked for offlining and are offlined when freed back
-to the allocator. However, when already free pages are directly offlined,
-free memory the outstanding claims may need to be adjusted directly too.
-
-:c:func:`reserve_offlined_page()` needs to check whether offlining the page
-causes :c:var:`total_avail_pages` to fall below :c:var:`outstanding_claims` or
-:c:expr:`node_avail_pages[page->node]` to fall below
-:c:expr:`node_outstanding_claims[page->node]`. If so,
-:c:func:`reserve_offlined_page()` must look for domains with relevant claims
-and recall those claims until the claim accounting is valid again.
-
-- When
-  :c:expr:`node_outstanding_claims[page->node]` exceeds
-  :c:expr:`node_avail_pages[page->node]` for the offlined page,
-  :c:func:`reserve_offlined_page()` should call
-  :c:func:`domain_release_node_claims()`
-  to recall claims on that node from domains with claims on the node of the
-  offlined buddy until the claim accounting of the node is valid again.
-
-- When total :c:var:`outstanding_claims` exceeds :c:var:`total_avail_pages`,
-  :c:func:`reserve_offlined_page()` calls
-  :c:func:`domain_release_host_claims()` to recall host-wide claims
-  from domains until the overall claims accounting is valid again.
-
-This can violate claim guarantees, but it is necessary to maintain system
-stability when memory must be offlined.
+Offlining free heap pages reduces :c:var:`total_avail_pages` and
+:c:expr:`node_avail_pages[node]` without changing outstanding claims. A page
+still in use is instead marked for offlining; when freed, it is excluded
+from the available heap. Claims can therefore exceed available memory after
+offlining, and the original reservation guarantee no longer holds. The
+allocator clamps per-node availability to zero when subtracting
+:c:var:`node_claimed_pages`; it does not recall claims from domains.
 
 .. c:function:: int reserve_offlined_page(struct page_info *head)
 
-    :param head: The page being offlined
+    :param head: The head of a free buddy block containing offlined pages
     :type head: struct page_info *
-    :returns: 0 on success, or a negative error code on failure.
+    :returns: The number of pages newly removed from availability.
 
-    This function is called during the offlining process to offline pages.
-
-    If offlining a page causes available memory to fall below outstanding
-    claims, it checks the node-specific and host-wide claim accounting
-    and recalls claims from domains as necessary to ensure accounting
-    invariants hold after a buddy is offlined.
+    The caller holds :c:var:`heap_lock`. The function removes the containing
+    buddy block, returns its unaffected portions to the free lists, and
+    excludes offlined pages from the available-page counters. The head need
+    not itself be an offlined page. Outstanding claims are not changed; the
+    per-node availability check clamps its subtraction, but cannot restore
+    the lost capacity.

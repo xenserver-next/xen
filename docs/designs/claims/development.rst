@@ -16,7 +16,7 @@ Version history
 The initial `implementation of single-node claims <v1_>`_ by Alejandro Vallejo
 used the legacy claims hypercall :c:macro:`XENMEM_claim_pages` and passed a
 NUMA node in the existing NUMA node bits of
-:c:expr:`xen_memory_reservation.mem_flags`. This added the flag
+:c:expr:`xen_memory_reservation.mem_flags`. This added the field
 ``d->claim_node`` to ``struct`` :c:struct:`domain`, which defined the target
 node for the domain's claims.
 
@@ -42,10 +42,11 @@ node for the domain's claims.
 
     -- Roger Pau Monné
 
-   This led to the `v2 <v2_>`_ and `v3 <v3_>`_ series, adding a new hypercall
-   API which designated passing an array of claims. This allowed for a more
-   flexible claim set design targeting multiple NUMA nodes and host-wide claims,
-   but only supported a single claim per domain at that time.
+This led to the `v2 <v2_>`_ and `v3 <v3_>`_ series. Their new hypercall API
+anticipated multi-node claims, but the implementation still tracked one claim
+target per domain using ``d->claim_node``. The array-shaped API was preparation
+for multi-node accounting, not evidence that multiple targets could already
+be installed together.
 
 .. sidebar:: Feedback and suggestions for multi-node claim sets
 
@@ -67,55 +68,50 @@ claimed memory against parallel allocations by other domain builders.
 v4 series
  With the `v4 series <v4_>`_, we submitted the combined work that completed the
  fixes for protecting claimed memory on NUMA nodes. The review process indicated
- that supporting multiple claim sets would require a `redesign <v4-03_>`_ of
+ that supporting multiple claim targets would require a `redesign <v4-03_>`_ of
  claim installation and management, which led to this design document.
 
 v5 series
- The `v5 series <v5_>`_ implemented the `Claim Sets Design Version 1 <d1>`_
+ The `v5 series <v5_>`_ implemented the `Claim Sets Design Version 1 <d1_>`_
  with support for multiple claim records per domain, and with a terminology
  of "consuming claims" for the process of redeeming claims during domain memory
  allocation and "retiring claims" for releasing claims for the low-level
  action of reducing the number of claimed pages for redeeming claims for an
- allocation, when destroying a domain or when claims must be recalled if all
- memory is claimed and then memory is offlined, which is needed to maintain
- the invariant that claimed memory can never be larger than free memory.
+ allocation and when destroying a domain. Recalling claims after offlining
+ was a design concern discussed at that time; the current v8 implementation
+ does not recall claims when offlining reduces the available capacity.
 
 v6 series
- The `v6 series <v6_>`_ implemented the `Claim Sets Design Version 2 <d2>`_.
+ The `v6 series <v6_>`_ implemented the `Claim Sets Design Version 2 <d2_>`_.
  The only difference between the two versions is that with design version 2,
  the initial term `"consuming claims"` was changed to `"redeeming claims"`
  and the term `"retiring claims"` was changed to `"deducting claims"`.
 
 v7 series
----------
+ The `v7 series <v7_>`_ renamed the functions handling redeeming claims
+ but retained the overall semantics of claim redemption and deduction.
 
- The v7 series will implement the `Claim Sets Design Version 3 <d3>`_ or newer
- with further improvements to the design and implementation:
+v8 series
+----------------
+ The v8 series implemented dynamic allocation of the
+ :c:member:`domain.claims` array, refactored claims installation,
+ and split setting and getting claims into separate operations.
 
- 1. As the code often needs the total sum of claims of a domain, this update
-    keeps :c:member:`domain.outstanding_pages` as the total sum of outstanding
-    claims of a domain. This obsoletes the former ``d->global_claims`` which
-    only tracked the unbound claims which were not affine to a NUMA node.
+ Claim installation was refactored into small, dedicated functions.
+ :c:func:`domain_set_claims()` to install claims
+ :c:func:`domain_get_claims()` for the new set/get domctls, while retaining
+ :c:func:`domain_set_outstanding_pages()` for the legacy
+ :c:macro:`XENMEM_claim_pages` interface and claim cleanup.
 
- 2. Avoid code duplication: Replace :c:func:`domain_set_outstanding_pages()`,
-    which handled the legacy claims hypercall :c:macro:`XENMEM_claim_pages`.
-    The new claim sets hypercall handler :c:func:`domain_install_claim_set()`,
-    integrates installing legacy claims for backwards compatibility.
-    The former :c:func:`domain_set_outstanding_pages()` is removed to
-    avoid duplicating the logic of installing claims in both places.
-
- 3. Improve the clarity of function and variable names. For example, the new
-    hypercall handler :c:func:`domain_install_claim_set()` is more descriptive
-    of its purpose than the former :c:func:`domain_set_outstanding_pages()`:
-
-    ==================================  =======================================
-      Former function name              New function name
-    ==================================  =======================================
-    ``domain_set_outstanding_pages()``  :func:`domain_set_claim_entries()`
-                                        :func:`domain_get_claim_entries()`
-    ``deduct_global_claims()``          :func:`domain_release_host_claims()`
-    ``deduct_node_claims()``            :func:`domain_release_node_claims()`
-    ==================================  =======================================
+The v8 interface uses separate :c:macro:`XEN_DOMCTL_set_memory_claims` and
+:c:macro:`XEN_DOMCTL_get_memory_claims` commands. Non-empty claims are accepted
+only during domain creation and only when no claims are already outstanding;
+an empty set releases claims. The per-node claims array is allocated on demand
+and freed when claims are explicitly released. A fully redeemed all-zero
+array can remain attached until release or a later installation replaces it.
+An independent cleanup patch releases leftover build claims when controller
+unpause first reduces the pause count to zero. It is not required by the
+eight-patch NUMA-claims series and does not restrict later legacy claim requests.
 
 Testing
 -------
@@ -131,10 +127,11 @@ suite <tv2_>`_ for validating the `v6 series <v6_>`_ was posted.
 Further development
 -------------------
 
-Based on review feedback, there is the wish to normalise the page counts of
-the page allocator to ``unsigned long``. A `first patch <u1_>`_ in this direction
-was posted to normalise the types of :c:var:`total_avail_pages` and
-:c:var:`outstanding_claims` to ``unsigned long`` in the page allocator.
+The host-wide :c:var:`total_avail_pages` and :c:var:`outstanding_claims`
+counters are ``unsigned long`` in the v8 baseline. The domain's claim counters
+and per-node array entries remain ``unsigned int``, with validation bounding
+requests before those stores. The `earlier widening proposal <u1_>`_ is
+historical context, not an outstanding prerequisite for this series.
 
 Acknowledgements
 ----------------
@@ -153,7 +150,7 @@ should be acknowledged for their contributions:
 - *Jan Beulich* for providing review suggestions that led to many improvements.
 
 - *Roger Pau Monné* for reviewing the initial implementation, `proposing
-  the initial multi-node claim-sets specification <_v1>`_, developing and
+  the initial multi-node claim-sets specification <v1m_>`_, developing and
   merging `critical fixes <fix1_>`_ upstream that enabled product-quality
   support for single-node claims which is the basis of the multi-node
   claim sets implementation.
@@ -193,5 +190,6 @@ should be acknowledged for their contributions:
    https://bernhard-xen.readthedocs.io/en/claim-sets-v2-design/designs/claims
 .. _v5: https://patchwork.kernel.org/project/xen-devel/list/?series=1078053
 .. _v6: https://patchwork.kernel.org/project/xen-devel/list/?series=1081139
+.. _v7: https://lore.kernel.org/xen-devel/cover.1778272036.git.bernhard.kaindl@citrix.com/
 .. _tv2: https://patchwork.kernel.org/project/xen-devel/list/?series=1083329
 .. _u1: https://patchwork.kernel.org/project/xen-devel/list/?series=1084344
