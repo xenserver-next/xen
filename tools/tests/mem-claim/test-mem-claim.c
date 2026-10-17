@@ -12,11 +12,11 @@
 #include <xen-tools/common-macros.h>
 
 static unsigned int nr_failures;
-#define fail(fmt, ...)                          \
-({                                              \
-    nr_failures++;                              \
-    (void)printf(fmt, ##__VA_ARGS__);           \
-})
+#define fail(fmt, ...)                         \
+        ({                                     \
+             nr_failures++;                    \
+             (void)printf(fmt, ##__VA_ARGS__); \
+         })
 
 #define MB_PAGES(x) (MB(x) / XC_PAGE_SIZE)
 
@@ -51,7 +51,7 @@ static void run_tests(void)
         return fail("Failed to obtain physinfo: %d - %s\n",
                     errno, strerror(errno));
 
-    printf("Free pages: %"PRIu64", Oustanding claims: %"PRIu64"\n",
+    printf("Free pages: %" PRIu64 ", Oustanding claims: %" PRIu64 "\n",
            physinfo.free_pages, physinfo.outstanding_pages);
 
     if ( physinfo.outstanding_pages )
@@ -66,7 +66,8 @@ static void run_tests(void)
     if ( !(physinfo.capabilities & XEN_SYSCTL_PHYSCAP_hap) )
         create.flags &= ~XEN_DOMCTL_CDF_hap;
 
-    if ( !(physinfo.capabilities & (XEN_SYSCTL_PHYSCAP_hap|XEN_SYSCTL_PHYSCAP_shadow)) ||
+    if ( !(physinfo.capabilities &
+           (XEN_SYSCTL_PHYSCAP_hap | XEN_SYSCTL_PHYSCAP_shadow)) ||
          !(physinfo.capabilities & XEN_SYSCTL_PHYSCAP_hvm) )
     {
         create.flags &= ~XEN_DOMCTL_CDF_hvm;
@@ -95,7 +96,7 @@ static void run_tests(void)
                     errno, strerror(errno));
 
     if ( physinfo.outstanding_pages )
-        return fail("  Unexpected outstanding claim of %"PRIu64" pages\n",
+        return fail("  Unexpected outstanding claim of %" PRIu64 " pages\n",
                     physinfo.outstanding_pages);
 
     /*
@@ -113,7 +114,7 @@ static void run_tests(void)
                     errno, strerror(errno));
 
     if ( physinfo.outstanding_pages != MB_PAGES(4) )
-        return fail("  Expected claim to be 4M, got %"PRIu64" pages\n",
+        return fail("  Expected claim to be 4M, got %" PRIu64 " pages\n",
                     physinfo.outstanding_pages);
 
     /*
@@ -133,7 +134,7 @@ static void run_tests(void)
                     errno, strerror(errno));
 
     if ( physinfo.outstanding_pages != MB_PAGES(2) )
-        return fail("  Expected claim to be 2M, got %"PRIu64" pages\n",
+        return fail("  Expected claim to be 2M, got %" PRIu64 " pages\n",
                     physinfo.outstanding_pages);
 
     /*
@@ -154,7 +155,7 @@ static void run_tests(void)
                     errno, strerror(errno));
 
     if ( physinfo.outstanding_pages )
-        return fail("  Expected no outstanding claim, got %"PRIu64" pages\n",
+        return fail("  Expected no outstanding claim, got %" PRIu64 " pages\n",
                     physinfo.outstanding_pages);
 }
 
