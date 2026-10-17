@@ -136,6 +136,33 @@ definition, and do not replace them with "domain" or "guest" in suggested text.
 - Present clear, localized fixes as review suggestions, either alongside each finding or as a final batch, whichever keeps the review cleaner.
   - Do not defer obvious tiny nits merely because they are cosmetic.
 
+## Formatting Reviewed Changes
+
+- Use the pinned Uncrustify build and repository configuration to check how
+  new or changed code is formatted. From the repository root, use:
+
+  ```sh
+  ../uncrustify-uncrustify-0.83.0/build/uncrustify -c .uncrustify.cfg --replace <files>
+  ```
+
+- For C source and headers added by the reviewed commit, format the whole
+  new file. Determine new-file status against that commit's parent, not
+  merely against the current worktree or the latest review-fix commit.
+- For pre-existing files, obtain formatter output on an isolated copy and
+  apply only changes to the reviewed new or changed lines. Do not use
+  whole-file `--replace` on inherited source or retain unrelated formatter
+  churn. Include adjacent lines only when needed to keep the changed code
+  syntactically correct and consistently formatted.
+- Inspect the formatter's actual output rather than guessing its layout.
+  Preserve concurrent author edits and explicitly chosen layouts. The
+  formatter is a consistency aid, not a replacement for `CODING_STYLE`,
+  comment review, or the central skill's topic-block spacing checks.
+- After formatting, inspect the scoped diff, measure affected columns, run
+  `git diff --check`, and repeat the permitted focused validation. Report
+  formatter/configuration conflicts instead of silently widening the edit.
+- A changed-lines formatting helper may automate the isolated-copy workflow,
+  but creating such a tool is separate work unless explicitly requested.
+
 ## Suggested Fix Policy
 - Provide review findings and suggested fixes.
 - Every nit you identify must be reported with a suggested fix or an explanation of why a fix cannot be provided.
