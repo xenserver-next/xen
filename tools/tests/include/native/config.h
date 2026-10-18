@@ -21,6 +21,8 @@
 #include <unistd.h>
 #undef __nonnull
 
+/* Basic Xen defines */
+#define CONFIG_DEBUG
 #ifdef __arm__
 #define CONFIG_ARM_32
 #define CONFIG_PADDR_BITS 40
