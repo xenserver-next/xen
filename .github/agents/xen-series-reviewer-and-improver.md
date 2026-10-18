@@ -59,13 +59,20 @@ The user reads questions for the `vscode/askQuestions` tool in a narrow panel, s
 
 ## Writing Review Notes
 
-Never include Git commit hashes in review reports.
-In reviewed-state or scope sections, identify the branch and scope without listing its commits, patch objects or tip hashes. Refer to findings by patch number, subject, file or symbol instead.
+Never include dates and Git commit hashes in review reports.
+In reviewed-state or scope sections, identify the branch and scope without listing its commits, patch objects or tip hashes.
+Refer to findings by the short name or topic of the patch, subject, file or symbol instead.
+Refer-to current patch's changes simply as this patch, not as snapshot of parent-to-patch.
+Omit messages like: "This is a source-review conclusion, not build or runtime verification."
 
-Record reviewer concerns in the corresponding patch's review note file, not in a separate central file. For these entries, use the code-review skill's "Reviewer concern notes" format instead of the list-based rules below: sentence-case headings and exactly three plain paragraphs labelled `**The suspicion.**`, `**Disposition.**` and `**Targeted mitigation.**`.
+Record reviewer concerns in the corresponding patch's review note file, not in a separate central file.
+For these entries, use the code-review skill's "Reviewer concern notes" format instead of the list-based rules below:
+sentence-case headings and exactly three plain paragraphs labelled `**The suspicion.**`, `**Disposition.**` and `**Targeted mitigation.**`.
 Do not use lists or nested lists inside these entries.
 
 The files in .review/ are not submitted upstream, do not use the 79 column limit for them.
+- But start new sentences, also delimited by ";" or ":" at a new line.
+  Avoid run-on sentences, and keep each sentence clear and concise.
 - The first line of a review comment is only its topic or headline, its details follow as sub-items.
 - Sub-items stay directly below their top-level item, without empty lines.
 - Example:
@@ -74,8 +81,10 @@ The files in .review/ are not submitted upstream, do not use the 79 column limit
   - and its static helpers are used,
   - so the patch is bisectable.
   ```
-- This applies to prose only. Unified diffs and code quotes keep the layout of the code they show.
-- Do not reformat existing notes only to follow this format. Use it for the text you write or change.
+- This applies to prose only.
+  Unified diffs and code quotes keep the layout of the code they show.
+- Do not reformat existing notes only to follow this format.
+  Use it for the text you write or change.
 - Do not write review notes about the mechanics of formatting that are fine:
   - Do not report subject or body line lengths, trailing whitespace, tag order, and the like when they are correct.
   - No note is the good note when the formatting is good.
@@ -84,6 +93,16 @@ The files in .review/ are not submitted upstream, do not use the 79 column limit
   - Do not write an "Edits applied" section that only says "None.".
   - Add such a section only when edits were applied, and then list them.
   - The same applies to any other section that would have no content.
+
+## Cleanup, no historical notes
+
+- Remove notes on resolved issues and historical notes.
+- Remove notes on performed and not performed builds of the code, do not add such notes.
+- Remove notes resolved issues.
+- When a suggestion becomes obsolete or irrelevant, remove it from the review notes.
+- Remove notes on incorporated changes and applied edits.
+- Remove notes referring to earlier reviews and historical results.
+- Remove review files that have no outstanding findings, do not add such.
 
 ## Build
 - Each commit must compile, work as expected, and not cause any regressions for any target architecture of Xen, including different configuration by selecting `CONFIG_`-defines which are different from the default, also if they can only be selected if `CONFIG_UNSUPPORTED` is selected.
