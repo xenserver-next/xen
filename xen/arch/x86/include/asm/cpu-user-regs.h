@@ -4,12 +4,14 @@
 
 #include <xen/stdint.h>
 
+#ifndef __XEN__
+#include <public/xen.h> /* provides public cpu_user_regs definitions */
+#else
 /*
  * cpu_user_regs represents the interrupted GPR state at the point of an
  * interrupt, exception or syscall.  The layout is dictated by the hardware
  * format for the event frame, with software filling in the rest.
  */
-#ifdef __XEN__
 struct cpu_user_regs
 {
     union { uint64_t r15;    uint32_t r15d;   uint16_t r15w;  uint8_t r15b; };
