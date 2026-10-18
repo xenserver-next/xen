@@ -8,10 +8,13 @@
  * Copyright (C) 2026 Cloud Software Group
  */
 #ifndef TOOLS_TESTS_NATIVE_HARNESS_MEMORY_WRAPPER_H
+#define TOOLS_TESTS_NATIVE_HARNESS_MEMORY_WRAPPER_H
 #ifdef TEST_WRAP_XEN_COMMON_MEMORY_C
 #include "memory-shim.h"
+#pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-variable"
 #include <common/memory.c>
+#pragma GCC diagnostic pop
 
 /*
  * Pass libxenctrl's xc_memory_op() calls to the Xen hypervisor's

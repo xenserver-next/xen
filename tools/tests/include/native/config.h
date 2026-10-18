@@ -8,7 +8,7 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <stdio.h>
-/* Xen's __nonull conflicts with glibc; include headers used by libxc here. */
+/* Xen's __nonnull conflicts with glibc; include headers used by libxc here. */
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>

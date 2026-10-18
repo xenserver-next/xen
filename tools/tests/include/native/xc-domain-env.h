@@ -81,8 +81,8 @@ static inline int domctl_hypercall(xc_interface *xch,
             assert(_ret == 0);                                            \
             assert(_got == _entries);                                     \
             for ( uint32_t _i = 0; _i < _entries; _i++ )                  \
-            assert(_set[_i].pages == (expected)[_i].pages &&              \
-                   _set[_i].target == (expected)[_i].target);             \
+                assert(_set[_i].pages == (expected)[_i].pages &&          \
+                       _set[_i].target == (expected)[_i].target);         \
         } while ( 0 )
 #endif
 #endif

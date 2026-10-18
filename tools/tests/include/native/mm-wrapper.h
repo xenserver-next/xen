@@ -15,7 +15,7 @@
  * In the real hypervisor, the frame table is located at a fixed virtual
  * address, but in the test harness, it is allocated in BSS or heap, so
  * replace the fixed virtual address definitions with dynamic ones.
- * xen/mm.h defines the frame_table define put point to the virt start.
+ * xen/mm.h defines frame_table in terms of FRAMETABLE_VIRT_START.
  */
 #undef FRAMETABLE_VIRT_START
 #undef FRAMETABLE_VIRT_END
@@ -33,7 +33,7 @@ unsigned long FRAMETABLE_VIRT_END;
  * the virtual address of the owner domain of a page. They use pdx_to_virt()
  * and virt_to_pdx() which use DIRECTMAP_VIRT_START to translate between the
  * page_info struct's pdx-encoded owner field and the virtual address of
- * the owner domain, so setting DIRECTMAP_VIRT_START to the address of a
+ * the owner domain, so setting DIRECTMAP_VIRT_START to the address of
  * an early page-aligned symbol in the test binary (e.g. test_bss_start)
  * allows the test code to set up and get page ownership.
  */

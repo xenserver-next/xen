@@ -4,8 +4,8 @@
  *
  * This file includes the real domctl.c directly in its translation unit.
  *
- * It allows to pass hypercalls from xc_domain to the do_domctl()
- * hypercall handler bin xen/common/domctl.c, which is the entry
+ * It passes hypercalls from xc_domain.c to the do_domctl()
+ * hypercall handler in xen/common/domctl.c, which is the entry
  * point for domctl commands in the Xen hypervisor.
  *
  * Copyright (C) 2026 Cloud Software Group

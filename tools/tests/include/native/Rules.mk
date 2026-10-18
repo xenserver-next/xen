@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 
+.DEFAULT_GOAL := all
+
 # Rules for building and running native tests.
 srctree  := $(XEN_ROOT)/xen
 obj      := .
@@ -110,7 +112,7 @@ $$(OBJ_$(1)) $$(BIN_$(1)): CLANG_FLAGS := -fdiagnostics-absolute-paths \
 	--target=$$(TARGET_TRIPLE_$$(ARCH_$(1)))
 endif
 
-DEPS += $(subst ./,.,$(OBJ_$(1):.o=.o.d))
+DEPS += $$(subst ./,.,$$(OBJ_$(1):.o=.o.d))
 O_CFLAGS_$$(ARCH_$(1)) := $$(COMMON_CFLAGS) $$(ARCH_CFLAGS_$$(ARCH_$(1)))
 O_CFLAGS_$$(ARCH_$(1)) += -I$(srctree)/arch/$$(SRCARCH_$(1))/include
 O_CFLAGS_$$(ARCH_$(1)) += -I$(objtree)/arch/$$(SRCARCH_$(1))/include/generated
@@ -150,7 +152,8 @@ ifeq ($$(SRCARCH_$(1)),x86)
 	    test ! -r $(XEN_ROOT)/xen/arch/x86/include/asm/asm-macros.h; then \
 		$(MAKE) -C $(XEN_ROOT)/xen \
 			KCONFIG_CONFIG=$(CURDIR)/.config.$$(ARCH_$(1)) \
-			XEN_TARGET_ARCH=$$(ARCH_$(1)) arch-include; \
+			XEN_TARGET_ARCH=$$(ARCH_$(1)) arch-include || \
+			exit $$$$?; \
 		rm -f $(CURDIR)/.config.$$(ARCH_$(1)); \
 	fi
 endif
@@ -159,6 +162,8 @@ endif
 setup-$(1): $(objtree)/arch/$$(SRCARCH_$(1))/include/generated/asm \
 	setup-$(1)-asm-macros
 
+$$(OBJ_$(1)): | setup-$(1)
+
 .PHONY: build-$(1)
 build-$(1): setup-$(1) $$(BIN_$(1))
 
@@ -166,7 +171,7 @@ build-$(1): setup-$(1) $$(BIN_$(1))
 output-$(1): $$(OUTPUT_$(1))
 
 .PHONY: clean-$(1)
-clean-$(1): $(objtree)/arch/$$(SRCARCH_$(1))/include/generated/asm
+clean-$(1):
 	$(Q)$(RM) -- $$(OBJ_$(1)) $$(BIN_$(1)) $$(OUTPUT_$(1))
 endef
 $(foreach arch,$(SUPPORTED_ARCHS), $(eval $(call ARCH_template,$(arch))))
@@ -198,7 +203,8 @@ clean: clean-archs
 	@$(RM) -v -- *.o $(TARGETS) $(DEPS_RM)
 
 .PHONY: postclean-test
-postclean-test: test clean
+postclean-test: test
+	$(Q)$(MAKE) clean
 
 .PHONY: distclean
 distclean: clean

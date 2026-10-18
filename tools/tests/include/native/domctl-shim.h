@@ -14,7 +14,7 @@
 #define TOOLS_TESTS_NATIVE_HARNESS_DOMCTL_SHIM_H
 
 #ifdef TEST_WRAP_XEN_COMMON_DOMCTL_C
-#ifdef __XEN_FRAME_NUM_H__ /* x86_64 header differnce */
+#ifdef __XEN_FRAME_NUM_H__ /* x86_64 header difference */
 #define mfn_to_gfn(d, mfn) ((void)(d), _gfn(mfn_x(mfn)))
 #endif
 
@@ -69,9 +69,27 @@ static int native_xsm_domctl(struct domain *d, struct xen_domctl *op)
 #define domain_set_node_affinity(d, mask)     0
 #define domain_pause_by_systemcontroller(d) \
         ((d)->controller_pause_count++, 0)
-#define domain_unpause_by_systemcontroller(d) \
-        ((d)->controller_pause_count > 0      \
-         ? ((d)->controller_pause_count--, 0) : -EINVAL)
+
+/* Model the claim-relevant part of controller unpause, not guest execution. */
+static int native_domain_unpause_by_systemcontroller(struct domain *d)
+{
+    if ( d->controller_pause_count <= 0 )
+        return -EINVAL;
+
+    if ( !--d->controller_pause_count && !d->creation_finished )
+    {
+        if ( d->pending_scrub )
+            return -EBUSY;
+
+        d->creation_finished = true;
+        domain_set_outstanding_pages(d, 0);
+    }
+
+    return 0;
+}
+#define domain_unpause_by_systemcontroller \
+        native_domain_unpause_by_systemcontroller
+
 #define domain_set_time_offset(d, off)        ((void)(d))
 #define get_domain_by_id(id)                  ((struct domain *)NULL)
 #define hypercall_create_continuation(...)    0

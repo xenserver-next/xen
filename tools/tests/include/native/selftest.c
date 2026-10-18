@@ -53,7 +53,6 @@ static void test_hypercall_bounce(int start_mfn)
     }
 }
 
-
 int main(void)
 {
     run_test(test_equal_expressions, 0);

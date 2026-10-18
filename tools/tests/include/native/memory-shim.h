@@ -1,12 +1,12 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Minimal shim to include xen/common/domctl.c in host-side tests.
+ * Minimal shim to include xen/common/memory.c in host-side tests.
  *
- * This shim provides the minimal Xen definitions that domctl.c
+ * This shim provides the minimal Xen definitions that memory.c
  * needs to run in a host-side test environment.  It replaces a
- * minimal subset of the Xen environment that xen/common/domctl.c
+ * minimal subset of the Xen environment that xen/common/memory.c
  * interacts with with stubs so it can run in the test environment,
- * allowing test scenarios to verify the behavior of domctl.c.
+ * allowing test scenarios to verify the behavior of memory.c.
  *
  * Copyright (C) 2026 Cloud Software Group
  */
@@ -80,6 +80,8 @@ int rcu_lock_remote_domain_by_id(domid_t dom, struct domain **dp)
         if ( d->domain_id == dom )
         {
             *dp = d;
+            if ( d == current->domain )
+                return -EPERM;
             return 0;
         }
     }

@@ -96,12 +96,11 @@ irq_cpustat_t irq_stat[NR_CPUS];
 #define page_get_owner_and_reference(pg)  page_get_owner(pg)
 
 #ifdef __x86_64__
-#define clear_page_hot(ptr)     ((void)0)
-#define clear_page_cold(ptr)    ((void)0)
-
+#define scrub_page_hot(ptr)     ((void)0)
 #define scrub_page_cold(ptr)    ((void)0)
+#define clear_page_cold(ptr)    ((void)0)
 #define set_gpfn_from_mfn(m, g) ((void)0)
-#define arch_get_dma_bitsize() 32U
+#define arch_get_dma_bitsize()  32U
 #endif
 
 unsigned int get_max_nr_llc_colors(void) { return 1U; }

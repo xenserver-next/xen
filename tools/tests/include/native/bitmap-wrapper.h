@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-/* Xen notemap and bitmap operations with native bitops */
+/* Xen nodemask and bitmap operations with native bitops */
 
 #ifndef TOOLS_TESTS_INCLUDE_NATIVE_BITOPS_SHIM_H
 #define TOOLS_TESTS_INCLUDE_NATIVE_BITOPS_SHIM_H
@@ -45,6 +45,7 @@ unsigned int nr_cpumask_bits = BITS_TO_LONGS(NR_CPUS) * BITS_PER_LONG;
 #define __raw_copy_from_guest raw_copy_from_guest
 
 #define hweightl(v) __builtin_popcountl(v)
+#undef LITTLE_ENDIAN /* pending changes in bitmap.c */
 #include <common/bitmap.c>
 #undef __XEN_TOOLS__
 #include <lib/find-next-bit.c>

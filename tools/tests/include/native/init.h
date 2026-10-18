@@ -26,17 +26,9 @@ static void *test_bss_start;
             if ( !(cond)) panic(fmt, ##__VA_ARGS__); \
 } while ( 0 )
 
-static inline bool _equal(long a, long b, const char *as, const char *bs)
-{
-    if ( a == b )
-        return true;
-    printf("Assertion failed: %ld == %ld (%s == %s)\n", a, b, as, bs);
-    return false;
-}
-#define EQ(a, b) do {                            \
-    if ( !_equal((long)(a), (long)(b), #a, #b) ) \
-        assert(0);                               \
-} while ( 0 )
+#define EQ(actual, expected)                                            \
+    ENSURE((actual) == (expected), "Assertion failed: %s == %s",         \
+           #actual, #expected)
 #define XE(xc_call, expected) EQ(native_xc_status(xc_call), expected)
 
 static unsigned int test_functions_run;

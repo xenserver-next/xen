@@ -7,7 +7,7 @@
 #ifndef TOOLS_TESTS_INCLUDE_NATIVE_NUMA_SHIM_H
 #define TOOLS_TESTS_INCLUDE_NATIVE_NUMA_SHIM_H
 
-/* Provide architectore-specific infrastructure: direct map offset helpers */
+/* Provide architecture-specific infrastructure: direct map offset helpers */
 #define mfn_to_pdx(mfn)            mfn_x(mfn)
 #define paddr_to_pdx(pa)           ((pa) >> PAGE_SHIFT)
 #define maddr_to_directmapoff(ma)  ((unsigned long)(ma))
