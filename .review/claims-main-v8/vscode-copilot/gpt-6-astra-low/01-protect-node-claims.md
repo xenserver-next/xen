@@ -1,10 +1,13 @@
-# Patch 1: protect per-node claims in `get_free_buddy()`
+# Protect per-node claims in `get_free_buddy()`
 
-No implementation finding:
-- Reviewed the parent-to-patch diff and allocator context at this revision, alongside the corresponding Opus, Astra and Haiku notes.
-- Zero-initialized claims make the node-total test redundant with the existing per-zone tests. The patch is behaviorally self-contained.
-- `heap_lock` protects admission and buddy selection; anonymous and no-refcount allocations receive no claim credit. Skipping a node preserves exact-node handling.
-- The offlining clamp prevents subtraction wrap, not depletion of reservations by memory offlining.
+## Memory offlining can invalidate reservations
 
-Verification:
-- Source inspection only; no compile or runtime tests were run.
+**The suspicion.** The node-availability clamp can be mistaken for preserving reservations after free pages are offlined.
+
+**Disposition.** The clamp prevents unsigned subtraction from wrapping;
+it does not replace removed capacity.
+Actual zone and buddy checks still require free pages.
+The separate `check_low_mem_virq()` subtraction is not protected by this clamp.
+
+**Targeted mitigation.** Keep the offlining limitation explicit.
+Any claim recall or low-memory-notification arithmetic change needs a separately scoped change.

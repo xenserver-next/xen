@@ -1,13 +1,11 @@
-# 03 - xen/mm: redeem per-node claims for allocations
+# Redeem per-node claims for allocations
 
-**Result:** no open findings.
-- Redemption consumes the selected node's claim, then the host-wide claim,
-  then claims on other nodes.
-- Node redemption changes all five relevant counters; host-wide redemption
-  changes only the domain and global outstanding totals.
-- The other-node remainder is bounded by the remaining node claims, so
-  ASSERT(!pages) states an invariant, not an input check.
-- "Exactly" distinguishes full redemption from the helpers that redeem
-  "up to" the requested amount.
-- The retained count explanation starts with a capital letter.
-- The short adjacent guards and established layout are preserved.
+## Failed assignment does not restore a redeemed claim
+
+**The suspicion.** A page-assignment failure can return pages to the heap after their claim has been redeemed.
+
+**Disposition.** Redemption precedes assignment, and freeing the pages does not replenish the reservation.
+The supported domain-build contract relies on aborting the build after such a failure.
+
+**Targeted mitigation.** Do not treat allocation retry after failed assignment as preserving the original claim.
+Keep the build-abort requirement explicit.

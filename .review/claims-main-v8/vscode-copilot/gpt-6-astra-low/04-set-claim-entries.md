@@ -1,14 +1,11 @@
-# Patch 4: install NUMA memory claims
+# Install NUMA memory claims
 
-Installer review:
-- Validation bounds each incremental sum by `max_pages` before narrowing. Duplicate, reserved, zero-sized and invalid-node requests fail before published state changes.
-- Global admission uses guarded subtraction; successful admission bounds subsequent counter increments. Node admission uses a 64-bit expression with input bounded by the domain limit and existing claims bounded by physical page counts.
-- Candidate allocation, pointer replacement and freeing preserve ownership. Fully redeemed arrays may remain attached safely until replacement or release.
-- Hot-add rollback clears a newly online node only before `transfer_pages_to_heap()`. A positive claim cannot pass admission on that node before it has free heap pages, closing the online-node-loop concern from patches 2 and 3.
-- Consulted the corresponding Opus, Astra, Haiku and earlier GPT summary sections. Preserved previously approved layouts and the supported serialized domain-build scope.
+## Installation must not overlap unfinished allocations
 
-## Suggested commit-message diff
+**The suspicion.** Holding `d->page_alloc_lock` during validation could be mistaken for accounting for every allocation already in flight for the domain.
 
-Verification:
-- An arithmetic model passed 648 boundary cases for the widened assignment guard and reproduced unsigned-int wrap in the old expression. This does not execute Xen or establish reachability of the extreme counterexample.
-- Editor diagnostics and whitespace checks passed. Compile and runtime tests were not run.
+**Disposition.** Pages removed from the heap but awaiting assignment are absent from `domain_tot_pages(d)`.
+The lock preserves the counters read by validation but does not account for those pages, including scrub continuations.
+
+**Targeted mitigation.** The domain builder must serialize claim installation with complete allocation operations.
+Do not broaden the atomic-installation guarantee to include pending assignment.
