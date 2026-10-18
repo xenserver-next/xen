@@ -9,14 +9,6 @@
 #include "common.h"
 static void *test_bss_start;
 
-#ifdef TEST_USES_LIBXENCTRL_DOMAIN_API
-#define TEST_WRAP_XEN_COMMON_SYSCTL_C
-#endif
-
-#ifdef TEST_WRAP_XEN_COMMON_SYSCTL_C
-#define CONFIG_SYSCTL 1
-#endif
-
 #define panic(fmt, ...)                      \
         do {                                 \
             printf(fmt "\n", ##__VA_ARGS__); \
@@ -63,9 +55,7 @@ static int test_complete(void)
 #include "memory-wrapper.h"
 #endif
 
-#ifdef TEST_WRAP_XEN_COMMON_SYSCTL_C
-#include "sysctl-wrapper.h"
-#endif
+int xc_sysctl(xc_interface *xch, struct xen_sysctl *sysctl) { return 0; }
 
 #ifdef TEST_WRAP_XEN_COMMON_PAGE_ALLOC_C
 #include "page-alloc-env.h"
