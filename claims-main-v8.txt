@@ -33,9 +33,13 @@ The host-wide XENMEM_claim_pages infrastructure is preserved and reused.
 A later series can consolidate the implementations and deprecate
 XENMEM_claim_pages. Deferring that keeps this series focused.
 
-Tested with updated and improved system and integration tests
-for memory claims. They will be submitted as a separate series,
-as will other dependent work for improving Xen NUMA support.
+Tested with updated and improved system and integration tests. They
+implement a number of finite arithmetic models with two domains and
+four NUMA nodes, unclaimed pages, claims, requests and allocations,
+check global admission and own-node credit, redeem actual-node, host
+and other-node claims, preserve exact redemption, other-domain claims.
+They will be submitted as a separate series, as will other dependent
+work for improving Xen NUMA support.
 
 Related work:
 - Reporting how much unclaimed memory remains on each NUMA node
