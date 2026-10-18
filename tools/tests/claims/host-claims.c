@@ -6,14 +6,14 @@
 typedef int (*set_global_claims)(struct domain *d, unsigned long pages);
 set_global_claims install_host_claims;
 
-/* wrapper around xc_domain_claim_pages() */
+/* Wrapper around xc_domain_claim_pages() */
 static int set_host_claims_legacy(struct domain *d, unsigned long pages)
 {
     return xc_domain_claim_pages(xch, d->domain_id,
                                  pages ? pages + domain_tot_pages(d) : 0);
 }
 
-/* wrapper around xc_domain_set_memory_claims() */
+/* Wrapper around xc_domain_set_memory_claims() */
 static int set_host_claims(struct domain *d, unsigned long pages)
 {
     xen_domctl_memory_claim_t claim_set[] = {
@@ -26,8 +26,7 @@ static int set_host_claims(struct domain *d, unsigned long pages)
 
 static void test_alloc_domheap_pages(int start_mfn)
 {
-    int ret;
-    struct page_info *pages = frame_table + start_mfn, *pg;
+    struct page_info *pages = frame_table + start_mfn;
     xen_domctl_memory_claim_t set[] = {
         { .target = XEN_DOMCTL_MEMORY_CLAIM_TARGET_HOST, .pages = 3 },
     };
@@ -49,7 +48,7 @@ static void test_alloc_domheap_pages(int start_mfn)
 
 static void test_claim_and_alloc_mechanics(int start_mfn)
 {
-    struct page_info *expected_page, *allocated_page;
+    struct page_info *expected_page;
     struct page_info *page = frame_table + start_mfn;
     unsigned long heap_pages, installed_claims;
     unsigned int alloc_order;
@@ -123,7 +122,7 @@ static void test_claim_and_alloc_mechanics(int start_mfn)
     alloc_order = order0;
     /* Expect the highest available page to be allocated */
     expected_page = page + total_avail_pages - (1UL << alloc_order);
-    EQ(alloc_domheap_pages(dom2, alloc_order, 0), expected_page);;
+    EQ(alloc_domheap_pages(dom2, alloc_order, 0), expected_page);
     EQ(outstanding_claims, (installed_claims -= 1UL << alloc_order));
 
     /*

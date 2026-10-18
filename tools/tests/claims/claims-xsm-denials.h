@@ -1,9 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Comprehensive validation the XSM calls
- * of XEN_DOMCTL_set_memory_claims and XEN_DOMCTL_get_memory_claims:
- * A hook in xsm_domctl() checks it is given the correct arguments.
- * Tests allowing calls and denying the calls with expected error codes.
+ * Check the claims domctl XSM gate with injected allow and deny decisions.
+ * Verify the command, target domain, error and preserved claim state.
+ * This does not exercise dummy-XSM or FLASK policy decisions.
  */
 #define TEST_USES_LIBXENCTRL_DOMAIN_API
 #include <native/init.h>

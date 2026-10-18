@@ -231,7 +231,7 @@ static void test_claim_validation_boundaries(int start_mfn)
             entries[1].pages = 0; /* Invalid zero-page entry in 2nd claim */
             break;
         case 2:
-            /* two claim entries targeting the host result in EINVAL */
+            /* Two claim entries targeting the host result in EINVAL */
             entries[0].target = XEN_DOMCTL_MEMORY_CLAIM_TARGET_HOST;
             break;
         case 3:
@@ -245,13 +245,13 @@ static void test_claim_validation_boundaries(int start_mfn)
             dom1->max_pages = 3; /* max_pages is below the requested claim */
             break;
         case 6:
-            dom1->max_pages = 6; /* above the requested claim (success) */
+            dom1->max_pages = 6; /* Allocations plus claims exactly fit */
             break;
         case 7:
             dom1->max_pages = 5; /* with allocation, claims exceed max_pages */
             break;
         case 8:
-            dom1->max_pages = 1; /* allows one entry, but not both entries */
+            dom1->max_pages = 1; /* Below the two allocated pages */
             entries[0].pages = entries[1].pages = 1;
             break;
         }
@@ -357,14 +357,18 @@ static inline void test_get_claims_scenario(int start_mfn,
     memset(get, 0xa5, sizeof(get));
     memset(untouched, 0xa5, sizeof(untouched));
     installed = dom1->claims;
-    XE(xc_domain_get_memory_claims(xch, dom1->domain_id, capacity ? get : NULL,
-                                    &nr), capacity < count ? -ENOBUFS : 0);
+    ret = xc_domain_get_memory_claims(xch, dom1->domain_id,
+                                     capacity ? get : NULL, &nr);
+    EQ(native_xc_status(ret), capacity < count ? -ENOBUFS : 0);
     ASSERT(nr == count);
-    if ( !errno )
+    if ( !ret )
         ENSURE(!memcmp(get, expected, count * sizeof(*get)) &&
                !memcmp(get + count, untouched + count,
                        (ARRAY_SIZE(get) - count) * sizeof(*get)),
                "Get scenario %u: records or buffer tail differ", scenario);
+    else
+        ENSURE(!memcmp(get, untouched, sizeof(get)),
+               "Get scenario %u: failed read changed output", scenario);
 
     ENSURE(dom1->claims == installed &&
            dom1->outstanding_pages == total &&
@@ -743,7 +747,8 @@ static void test_mixed_claim_lifecycle(int start_mfn)
             reset_page_alloc_state(0);
             test_page_list_add_node_buddy(target, start_mfn, order3);
             test_page_list_add_node_buddy((target + 1) % 4, start_mfn, order3);
-            EQ(xc_domain_set_memory_claims(xch, dom2->domain_id, &other, 1), 0);
+            EQ(xc_domain_set_memory_claims(xch, dom2->domain_id,
+                                           &other, 1), 0);
 
             if ( legacy_first )
                 EQ(xc_domain_claim_pages(xch, dom1->domain_id, 2), 0);
@@ -792,7 +797,8 @@ static void test_mixed_claim_lifecycle(int start_mfn)
             EQ(dom1->claims, NULL);
             check_mixed_claims(target, 0, 0);
 
-            EQ(xc_domain_set_memory_claims(xch, dom1->domain_id, &claim, 1), 0);
+            EQ(xc_domain_set_memory_claims(xch, dom1->domain_id,
+                                           &claim, 1), 0);
             check_mixed_claims(target, 0, 2);
             EQ(xc_domain_claim_pages(xch, dom1->domain_id, 0), 0);
             EQ(dom1->claims, NULL);
@@ -850,7 +856,6 @@ static void test_shared_capacity_model(int start_mfn)
         xen_domctl_memory_claim_t existing[2], request[2];
         unsigned int existing_count = 0, request_count = 0;
         unsigned int *installed;
-        int ret;
 
         scenarios++;
         reset_page_alloc_state(0);
@@ -969,13 +974,13 @@ static void test_redemption_model(int start_mfn)
             unsigned int node_boundary = expected[alloc_node];
             unsigned int host_boundary = node_boundary + host;
 
-                    if ( pages != 0 && pages != node_boundary &&
-                     pages != node_boundary + 1 && pages != host_boundary &&
-                     pages != host_boundary + 1 && pages != total &&
-                     pages != total + 1 &&
-                     (!node_boundary || pages != node_boundary - 1) &&
-                     (!host_boundary || pages != host_boundary - 1) )
-                    continue;
+            if ( pages != 0 && pages != node_boundary &&
+                 pages != node_boundary + 1 && pages != host_boundary &&
+                 pages != host_boundary + 1 && pages != total &&
+                 pages != total + 1 &&
+                 (!node_boundary || pages != node_boundary - 1) &&
+                 (!host_boundary || pages != host_boundary - 1) )
+                continue;
         }
 
         scenarios++;
